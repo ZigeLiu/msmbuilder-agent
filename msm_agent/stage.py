@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import traceback
 from typing import Any, Dict, List, Optional
 import glob
 import json
@@ -102,6 +103,7 @@ def run_stage1_featurization(cfg: Dict[str, Any], run_dir: Path = None) -> Dict[
             for x in features
         ]
     except (ValueError, AssertionError) as e:
+        traceback.print_exc()
         return {
             "success": False,
             "stage": "stage1_featurization",
@@ -113,6 +115,7 @@ def run_stage1_featurization(cfg: Dict[str, Any], run_dir: Path = None) -> Dict[
             }],
         }
     except Exception as e:
+        traceback.print_exc()
         return {
             "success": False,
             "stage": "stage1_featurization",
@@ -192,6 +195,7 @@ def run_stage2_tica_scan(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, 
             outpath=plot_path,
         )
     except (ValueError, AssertionError) as e:
+        traceback.print_exc()
         return {
             "success": False,
             "stage": "stage2_tica_param_scan",
@@ -203,6 +207,7 @@ def run_stage2_tica_scan(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, 
             }],
         }
     except Exception as e:
+        traceback.print_exc()
         return {
             "success": False,
             "stage": "stage2_tica_param_scan",
@@ -288,6 +293,7 @@ def run_stage3_tica_fit(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, A
                 gridsize=int(cfg["plots"]["gridsize"]),
             )
     except (ValueError, AssertionError) as e:
+        traceback.print_exc()
         return {
             "success": False,
             "stage": "stage3_tica_fit",
@@ -299,6 +305,7 @@ def run_stage3_tica_fit(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, A
             }],
         }
     except Exception as e:
+        traceback.print_exc()
         return {
             "success": False,
             "stage": "stage3_tica_fit",
@@ -363,6 +370,7 @@ def run_stage4_cluster(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, An
             min_occupancy=int(cfg["evaluation"]["min_occupancy"]),
         )
     except (ValueError, AssertionError) as e:
+        traceback.print_exc()
         return {
             "success": False,
             "stage": "stage4_cluster",
@@ -374,6 +382,7 @@ def run_stage4_cluster(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, An
             }],
         }
     except Exception as e:
+        traceback.print_exc()
         return {
             "success": False,
             "stage": "stage4_cluster",
@@ -450,6 +459,7 @@ def run_stage5_msm_scan(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, A
                                     last_step=int(cfg["evaluation"]["plateau_last_step"]),
                                     )
     except (ValueError, AssertionError) as e:
+        traceback.print_exc()
         return {
             "success": False,
             "stage": "stage5_msm_scan",
@@ -461,6 +471,7 @@ def run_stage5_msm_scan(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, A
             }],
         }
     except Exception as e:
+        traceback.print_exc()
         return {
             "success": False,
             "stage": "stage5_msm_scan",
@@ -524,6 +535,7 @@ def run_stage6_msm_fit(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, An
         weights = msm.populations_[np.concatenate(clustered_trajs)]
         plot_free_energy(txx[:,0], txx[:,1], weights, msm, run_dir / "figs" / "weighted_freeenergy.png", centers=cluster_centers)
     except (ValueError, AssertionError) as e:
+        traceback.print_exc()
         return {
             "success": False,
             "stage": "stage6_msm_fit",
@@ -535,6 +547,7 @@ def run_stage6_msm_fit(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, An
             }],
         }
     except Exception as e:
+        traceback.print_exc()
         return {
             "success": False,
             "stage": "stage6_msm_fit",
@@ -597,6 +610,7 @@ def run_stage7_lumpeval(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, A
         msm.fit(macro_trajs)
         occ_stat = compute_occupancy_stats(np.concatenate(macro_trajs).reshape(-1), n_clusters=int(msm_cfg["n_macrostates"]))
     except (ValueError, AssertionError) as e:
+        traceback.print_exc()
         return {
             "success": False,
             "stage": "stage7_lumpeval",
@@ -608,6 +622,7 @@ def run_stage7_lumpeval(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, A
             }],
         }
     except Exception as e:
+        traceback.print_exc()
         return {
             "success": False,
             "stage": "stage7_lumpeval",

@@ -87,24 +87,31 @@ def init_default_config() -> str:
             "selected_lag_time": None,
             "selected_n_components": None,
         },
-        "plots": {
-            "gridsize": 40,
-            "bins": 50,
+        "microMSM": {
+            "lag_time_frames_range": [1, 10],
+            "lag_time_frames_grid_size": 20,
+            "n_timescales": 5,
+            "reversible_type": "transpose",
+            "ergodic_cutoff": 1.0,
         },
-        "gates": {
-            "plateau_k": 3,
-            "plateau_last_step": 3,
-            "min_occupancy": 5,
+        "macroMSM": {
+            "n_macrostates": 4,
+            "lump_method": "PCCAPlus"
         },
         "clustering": {
             "method": "KMeans",
             "n_clusters": 50,
         },
-        "msm": {
-            "lag_time_frames_range": [1, 10],
-            "n_timescales": 5,
-            "reversible_type": "mle",
-            "ergodic_cutoff": 1.0,
+        "plots": {
+            "gridsize": 40,
+            "bins": 50,
+        },
+        "evaluation": {
+            "plateau_k": None,
+            "min_occupancy": 10,
+            "ck_plot_only": False,
+            "ck_test_steps": 4,
+            "ck_test_states": 6,
         },
     }
     return yaml_dump(fallback)
@@ -123,6 +130,7 @@ class SessionState:
 
     latest_summary: str = ""
     latest_plot_path: Optional[str] = None
+    error_msg: Optional[Dict[str, Any]] = None
 
     # optional: keep tool events for debugging
     tool_log: List[Dict[str, Any]] = field(default_factory=list)
@@ -134,25 +142,31 @@ class SessionState:
 CLIENT = OpenAI()
 MODEL = "gpt-5.2"
 
-SYSTEM_PROMPT = """You are an MSM pipeline agent for a multi-stage MD workflow.
+SYSTEM_PROMPT = """You are an MSM building agent for a multi-stage molecular dynamics simulation analysis workflow with MSMbuilder.
 
 Your role:
-- Help the user iteratively run Stage 1 -> Stage 2 -> Stage 3.
-- Default behavior is sequential:
+- Help the user sequentially run thorugh Stages.
+- Each stage have their specific tasks:
   1) Stage 1: featurization
-  2) Stage 2: tICA scan
-  3) Stage 3: final tICA fit
+  2) Stage 2: tICA parameter scan
+  3) Stage 3: fit tICA with selected parameters
+  4) Stage 4: cluster data points according to tica collevtive variables
+  5) Stage 5: scan parameters to build markov state model with cluter labels
+  6) Stage 6: build markov state model with cluster labels
+  7) Stage 7: lump clusters acording to transitions and evaluate model
 - If the user asks to modify config, use update_config_value first, then rerun the relevant stage.
 - Do not rewrite the whole YAML unless necessary. Prefer update_config_value.
 - After each tool result, summarize clearly and ask the user what they want to do next.
+- If tool call results is not success, inspect errors in result and include possible reasons in your responses.
+- Provide parameter tuning suggestions when receiving hints. 
 
 Important rules:
-- Stage 2 requires Stage 1 output already exists in the current run_dir.
-- Stage 3 requires Stage 1 output already exists, and tica.selected_lag_time must be set.
+- Each stage need the output from previous stage to run.
+- Stage 3 requires tica.selected_lag_time set.
+- Stage 6 requires microMSM.selected_lag_time set.
 - If the user says 'ok', 'continue', or 'next', usually move to the next stage without editing config.
-- If the user asks to change feature settings, update config and rerun Stage 1.
-- If the user asks to change tICA scan settings, update config and rerun Stage 2.
-- If the user asks to change final tICA parameters, update config and rerun Stage 3.
+- If the user asks to rerun, use the newest config and rerun current stage.
+- If the user asks to change parameters, confirm the user with parameters to change, update config and rerun current stage.
 - Keep responses concise, practical, and stage-aware.
 """
 
@@ -187,7 +201,7 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
-                "value_yaml": {"type": "string"},
+                "value_yaml": {"type": "string"}, ############################ check #################################
             },
             "required": ["path", "value_yaml"],
             "additionalProperties": False,
@@ -240,7 +254,7 @@ TOOLS = [
     {
         "type": "function",
         "name": "run_stage5_msm_scan",
-        "description": "Run Stage 5: MSM scan using current_run_dir and current config.",
+        "description": "Run Stage 5: MSM parameter scan using current_run_dir and current config.",
         "parameters": {
             "type": "object",
             "properties": {},
@@ -262,7 +276,7 @@ TOOLS = [
     {
         "type": "function",
         "name": "run_stage7_lumpeval",
-        "description": "Run Stage 7: lumping evaluation using current_run_dir and current config.",
+        "description": "Run Stage 7: lump and evaluate model using current_run_dir and current config.",
         "parameters": {
             "type": "object",
             "properties": {},
@@ -296,7 +310,7 @@ def tool_update_config_value(st: SessionState, path: str, value_yaml: str) -> Di
     set_nested_key(st.current_cfg_obj, path, value)
     st.current_cfg_yaml = yaml_dump(st.current_cfg_obj)
     return {
-        "ok": True,
+        "success": True,
         "updated_path": path,
         "new_value": value,
     }
@@ -319,18 +333,18 @@ def tool_run_stage(st: SessionState, stage: int) -> Dict[str, Any]:
 
     fn, stage_done_flag = stage_map[stage]
 
-    if not st.current_run_dir:
-        raise ValueError("No current_run_dir found. Please run Stage 1 first.")
-
     if stage == 1:
-        result = fn(st.current_cfg_obj)
+        result = fn(st.current_cfg_obj, None)
         st.current_run_dir = result.get("run_dir", st.current_run_dir)
+    elif not st.current_run_dir:
+        raise ValueError("No current_run_dir found. Please run Stage 1 first.")
     else:
         result = fn(st.current_cfg_obj, st.current_run_dir)
 
     st.current_stage = stage_done_flag
     st.latest_summary = result.get("summary", "")
     st.latest_plot_path = result.get("plot_path")
+    st.error_msg = result.get("errors","")
     return result
 
 
@@ -489,7 +503,7 @@ def run_agent_once(
                 output = json.dumps(result, ensure_ascii=False, default=str)
             except Exception as e:
                 output = json.dumps(
-                    {"ok": False, "error": str(e)},
+                    {"success": False, "error": str(e)},
                     ensure_ascii=False,
                 )
 
@@ -532,14 +546,14 @@ def build_app():
     with gr.Blocks(title="MSM Agent MVP") as demo:
         st = gr.State(SessionState())
 
-        gr.Markdown("## MSM Agent MVP\nLLM-driven sequential workflow: Stage 1 → Stage 2 → Stage 3")
+        gr.Markdown("## MSM building agent \nLLM-empowered molecular dynamics simulation analysis tool")
 
         with gr.Row():
             with gr.Column(scale=1):
                 chat = gr.Chatbot(label="Chat", height=560)
                 user_in = gr.Textbox(
                     label="Message",
-                    placeholder='Examples: "run stage 1", "change feature to distance", "ok continue", "set selected lag to 3 and run stage 3"',
+                    placeholder='Examples: "run featurization", "rerun with current config", "ok continue", "set selected tica lagtime to 3 and run tica scan"',
                 )
                 btn_send = gr.Button("Send")
 
@@ -551,7 +565,7 @@ def build_app():
                 )
                 latest_summary = gr.Textbox(label="Latest summary", lines=12)
                 current_run_dir = gr.Textbox(label="Current run dir")
-                latest_image = gr.Image(label="Latest plot", type="filepath", height=320)
+                latest_image = gr.Image(label="Output figure", type="filepath", height=320) ########## what happen if two out #######################
 
         btn_send.click(
             fn=run_agent_once,
