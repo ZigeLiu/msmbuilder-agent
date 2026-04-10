@@ -66,7 +66,6 @@ def init_default_config() -> str:
             "output_dir": "runs",
             "run_name": "ala2_test",
             "seed": 42,
-            "run_dir": None,  
         },
         "data": {
             "kind": "xtc",
@@ -140,8 +139,10 @@ class SessionState:
 # ----------------------------
 # LLM agent
 # ----------------------------
-CLIENT = OpenAI()
-MODEL = "gpt-5.2"
+CLIENT = OpenAI(base_url='http://localhost:11434/v1/',
+    api_key='ollama',
+)
+MODEL = "qwen3:8b"
 
 SYSTEM_PROMPT = """You are an MSM building agent for a multi-stage molecular dynamics simulation analysis workflow with MSMbuilder.
 
@@ -335,11 +336,8 @@ def tool_run_stage(st: SessionState, stage: int) -> Dict[str, Any]:
     fn, stage_done_flag = stage_map[stage]
 
     if stage == 1:
-        result = fn(st.current_cfg_obj, st.current_run_dir)
-        if st.current_run_dir is None:
-            st.current_run_dir = result.get("run_dir")
-            set_nested_key(st.current_cfg_obj, "run.run_dir", st.current_run_dir)
-            st.current_cfg_yaml = yaml_dump(st.current_cfg_obj)
+        result = fn(st.current_cfg_obj, None)
+        st.current_run_dir = result.get("run_dir", st.current_run_dir)
     elif not st.current_run_dir:
         raise ValueError("No current_run_dir found. Please run Stage 1 first.")
     else:
@@ -454,7 +452,6 @@ def run_agent_once(
 
     st.current_cfg_obj = cfg_obj
     st.current_cfg_yaml = yaml_text
-    st.current_run_dir = cfg_obj.get("run", {}).get("run_dir", st.current_run_dir) # read from config or none
 
     # 2) Append user message to UI chat history
     chat_history = chat_history or []
@@ -539,7 +536,7 @@ def run_agent_once(
         st,
         yaml_text,
         st.latest_summary,
-        #st.current_run_dir or "",
+        st.current_run_dir or "",
         st.latest_plot_path,
     )
 
@@ -561,7 +558,6 @@ def build_app():
                     placeholder='Examples: "run featurization", "rerun with current config", "ok continue", "set selected tica lagtime to 3 and run tica scan"',
                 )
                 btn_send = gr.Button("Send")
-                latest_image = gr.Image(label="Output figure", type="filepath", height=420) 
 
             with gr.Column(scale=1):
                 cfg_editor = gr.Code(
@@ -570,21 +566,20 @@ def build_app():
                     value=init_default_config(),
                 )
                 latest_summary = gr.Textbox(label="Latest summary", lines=12)
-                #current_run_dir = gr.Textbox(label="Current run dir")
-                #latest_image = gr.Image(label="Output figure", type="filepath", height=320) ########## what happen if two out #######################
-                #out_image = gr.Gallery(label="Visualized results").style(grid=[1], height="auto")
+                current_run_dir = gr.Textbox(label="Current run dir")
+                latest_image = gr.Image(label="Output figure", type="filepath", height=320) ########## what happen if two out #######################
 
         btn_send.click(
             fn=run_agent_once,
             inputs=[user_in, chat, cfg_editor, st],
-            outputs=[chat, st, cfg_editor, latest_summary, latest_image],
+            outputs=[chat, st, cfg_editor, latest_summary, current_run_dir, latest_image],
             api_visibility="private",
         )
 
         user_in.submit(
             fn=run_agent_once,
             inputs=[user_in, chat, cfg_editor, st],
-            outputs=[chat, st, cfg_editor, latest_summary, latest_image],
+            outputs=[chat, st, cfg_editor, latest_summary, current_run_dir, latest_image],
             api_visibility="private",
         )
 
@@ -594,4 +589,4 @@ def build_app():
 if __name__ == "__main__":
     demo = build_app()
     demo.queue()
-    demo.launch(share=True)
+    demo.launch()

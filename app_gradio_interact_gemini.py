@@ -294,7 +294,7 @@ TOOLS = [
                 "required": [],
                 "additionalProperties": False,
             },
-        },
+        },  
     }
 ]
 

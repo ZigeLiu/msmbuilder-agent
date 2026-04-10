@@ -228,8 +228,9 @@ def run_stage2_tica_scan(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, 
         **tica_param
     }
     write_json(manifest, run_dir / "stage2_manifest.json")
-
-    plateau_check = its_plateau_check(tica_its, lag_list.tolist(), top_k=int(cfg["evaluation"]["plateau_k"]), 
+    
+    top_k=int(cfg["evaluation"]["plateau_k"]) if cfg["evaluation"]["plateau_k"] is not None else None
+    plateau_check = its_plateau_check(tica_its, lag_list.tolist(), top_k=top_k, \
                         threshold=float(cfg["evaluation"]["plateau_threshold"]), last_step=int(cfg["evaluation"]["plateau_last_step"]))
 
     summary = build_stage2_summary(

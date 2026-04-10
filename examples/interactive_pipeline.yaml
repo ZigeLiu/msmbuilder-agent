@@ -2,11 +2,12 @@ run:
   output_dir: "runs"
   run_name: "ala2_stages"
   seed: 42
+  run_dir: null
 
 data:
   kind: "xtc"
-  dir: "../ala2_test_data"
-  topology: "../ala2_test_data/ala2.pdb"
+  dir: "ala2_test_data"
+  topology: "ala2_test_data/ala2.pdb"
   saving_interval: 1
   stride: 1
 
