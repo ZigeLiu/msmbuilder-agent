@@ -5,9 +5,10 @@ dependencies = [
   "numpy",
   "pyyaml",
   "matplotlib",
-  "msmbuilder2022",
   "mdtraj",
-  "scipy"
+  "scipy",
+  "openai",
+  "gradio"
 ]
 
 [project.scripts]

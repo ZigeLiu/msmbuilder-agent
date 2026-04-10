@@ -1,30 +1,18 @@
-<img width="2736" height="1706" alt="image" src="https://github.com/user-attachments/assets/02441092-9f14-4fca-8a10-8426fa24b2c3" />
+<img width="2736" height="1706" alt="image" src="images/show.png" />
 
 # MSM Agent Pipeline
-An interactive human-in-the-loop pipeline for iterative chemistry experiment exploration and optimization.
-The system combines automated parameter sweeps, structured result summarization, and LLM-assisted planning to guide experiment refinement over multiple cycles.
+An interactive human-in-the-loop pipeline for Markov state model construction.
+The agent have hard coded sequential stages to run traditional pipeline using MSMbuilder.
 
-# Overview
-```
-User → Base Config
-        ↓
-Config Generator / Runner
-        ↓
-Raw Experiment Results
-        ↓
-Summarizer → runs_summary.json
-        ↓
-LLM Planner → plan_json + explanation
-        ↓
-User Feedback / Edits
-        ↓
-Next Batch Execution
-        ↺ (loop)
-```
 
 # Setup
-
+Install MSMbuilder first following [MSMbuilder documentation](https://github.com/msmbuilder/msmbuilder2022)
+Clone the repo and go to the folder. Install and create environment, and set LLM API key locally.
 ```
-python app_gradio.py
+pip install .
+export OPENAI_API_KEY=your api key
+```
+```
+python app_gradio_interact.py
 ```
     
