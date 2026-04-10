@@ -1,1 +1,6 @@
 runs/
+*egg-info/
+*.pyc
+*.pem
+*__pycache__/
+._*
