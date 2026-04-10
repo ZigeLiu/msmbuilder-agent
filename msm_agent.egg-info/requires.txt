@@ -1,6 +1,0 @@
-numpy
-pyyaml
-matplotlib
-msmbuilder2022
-mdtraj
-scipy
