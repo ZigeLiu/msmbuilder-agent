@@ -539,8 +539,7 @@ def run_agent_once(
         st,
         yaml_text,
         st.latest_summary,
-        #st.current_run_dir or "",
-        st.latest_plot_path,
+        [(p,p) for p in st.latest_plot_path] if st.latest_plot_path else None,
     )
 
 
@@ -561,7 +560,8 @@ def build_app():
                     placeholder='Examples: "run featurization", "rerun with current config", "ok continue", "set selected tica lagtime to 3 and run tica scan"',
                 )
                 btn_send = gr.Button("Send")
-                latest_image = gr.Image(label="Output figure", type="filepath", height=420) 
+                #latest_image = gr.Image(label="Output figure", type="filepath", height=420) 
+                latest_image = gr.Gallery(label="Output figure", columns=1, height="500", object_fit="contain")
 
             with gr.Column(scale=1):
                 cfg_editor = gr.Code(
@@ -594,4 +594,4 @@ def build_app():
 if __name__ == "__main__":
     demo = build_app()
     demo.queue()
-    demo.launch(share=True)
+    demo.launch()

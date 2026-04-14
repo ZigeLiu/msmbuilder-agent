@@ -247,7 +247,7 @@ def run_stage2_tica_scan(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, 
         "stage": "stage2_tica_param_scan",
         "run_dir": str(run_dir),
         "summary": summary,
-        "plot_path": str(plot_path),
+        "plot_path": [str(plot_path)],
         "manifest_path": str(run_dir / "stage2_manifest.json"),
     }
 
@@ -342,7 +342,7 @@ def run_stage3_tica_fit(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, A
         "stage": "stage3_tica_fit",
         "run_dir": str(run_dir),
         "summary": summary,
-        "plot_path": str(density_plot_path) if density_plot_path else None,
+        "plot_path": [str(density_plot_path)] if density_plot_path else None,
         "manifest_path": str(run_dir / "stage3_manifest.json"),
     }
 
@@ -417,7 +417,7 @@ def run_stage4_cluster(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, An
         "stage": "stage4_cluster",
         "run_dir": str(run_dir),
         "summary": summary,
-        "plot_path": str(run_dir / "figs" / "occupancy_hist.png"),
+        "plot_path": [str(run_dir / "figs" / "occupancy_hist.png")],
         "manifest_path": str(run_dir / "stage4_manifest.json"),
     }
 
@@ -505,7 +505,7 @@ def run_stage5_msm_scan(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, A
         "stage": "stage5_msm_scan",
         "run_dir": str(run_dir),
         "summary": summary,
-        "plot_path": str(run_dir / "figs" / "microstateMSM_its_curve.png"),
+        "plot_path": [str(run_dir / "figs" / "microstateMSM_its_curve.png")],
         "manifest_path": str(run_dir / "stage5_manifest.json"),
     }
     
@@ -588,7 +588,7 @@ def run_stage6_msm_fit(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, An
         "stage": "stage6_msm_fit",
         "run_dir": str(run_dir),
         "summary": summary,
-        "plot_path": [run_dir / "figs" / "CK_test.png", run_dir / "figs" / "weighted_freeenergy.png"],
+        "plot_path": [str(run_dir / "figs" / "CK_test.png"), str(run_dir / "figs" / "weighted_freeenergy.png")],
         "manifest_path": str(run_dir / "stage6_manifest.json"),
     }
 

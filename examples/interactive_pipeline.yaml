@@ -6,8 +6,8 @@ run:
 
 data:
   kind: "xtc"
-  dir: "ala2_test_data"
-  topology: "ala2_test_data/ala2.pdb"
+  dir: "data/ala2_test_data"
+  topology: "data/ala2_test_data/ala2.pdb"
   saving_interval: 1
   stride: 1
 
