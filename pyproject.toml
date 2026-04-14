@@ -9,13 +9,13 @@ name = "msmbuilder-agent"
 version = "0.1.0"
 requires-python = ">= 3.10"
 dependencies = [
-  "numpy",
-  "pyyaml",
-  "matplotlib",
-  "mdtraj",
-  "scipy",
-  "openai",
-  "gradio"
+  "numpy>=1.26.0",
+  "pyyaml>=6.0.3",
+  "matplotlib>=3.10.8",
+  "mdtraj>=1.11.0",
+  "scipy>=1.16.3",
+  "openai>=2.21.0",
+  "gradio>=6.6.0"
 ]
 readme = "README.md"
 authors = [
