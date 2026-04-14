@@ -1,6 +1,13 @@
+[build-system]
+requires = ["setuptools", 
+        "wheel"
+        ]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "msm-agent"
+name = "msmbuilder-agent"
 version = "0.1.0"
+requires-python = ">= 3.10"
 dependencies = [
   "numpy",
   "pyyaml",
@@ -10,6 +17,15 @@ dependencies = [
   "openai",
   "gradio"
 ]
+readme = "README.md"
+authors = [
+  {name = "Zige Liu", email = "zliu2262@wisc.edu"},
+  {name = "Xinchi Liu", email = "xliu2434@wisc.edu"},
+]
 
-[project.scripts]
-msm-agent = "msm_agent.cli:main"
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["msm_agent*"]
+exclude = ["images*", "ala2_test_data*"]
