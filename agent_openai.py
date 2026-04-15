@@ -171,6 +171,48 @@ Important rules:
 - Keep responses concise, practical, and stage-aware.
 """
 
+# Only these config paths are editable via update_config_value.
+ALLOWED_CONFIG_UPDATE_PATHS = [
+    "run.output_dir",
+    "run.run_name",
+    "run.seed",
+    "run.run_dir",
+    "data.kind",
+    "data.dir",
+    "data.topology",
+    "data.stride",
+    "data.saving_interval",
+    "data.load_preprocessed_dir",
+    "features.type",
+    "features.selection",
+    "features.atom_selection",
+    "tica.lag_time_frames_range",
+    "tica.lag_time_frames_grid_size",
+    "tica.n_components",
+    "tica.selected_lag_time",
+    "tica.selected_n_components",
+    "microMSM.lag_time_frames_range",
+    "microMSM.lag_time_frames_grid_size",
+    "microMSM.n_timescales",
+    "microMSM.reversible_type",
+    "microMSM.ergodic_cutoff",
+    "microMSM.selected_lag_time",
+    "macroMSM.n_macrostates",
+    "macroMSM.lump_method",
+    "clustering.method",
+    "clustering.n_clusters",
+    "clustering.tiny_threshold"
+    "plots.gridsize",
+    "plots.bins",
+    "evaluation.plateau_k",
+    "evaluation.plateau_threshold",
+    "evaluation.plateau_last_step",
+    "evaluation.min_occupancy",
+    "evaluation.ck_plot_only",
+    "evaluation.ck_test_steps",
+    "evaluation.ck_test_states",
+]
+
 TOOLS = [
     {
         "type": "function",
@@ -202,7 +244,7 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
-                "value_yaml": {"type": "string"}, ############################ check #################################
+                "value_yaml": {"type": "string"}
             },
             "required": ["path", "value_yaml"],
             "additionalProperties": False,
@@ -305,8 +347,22 @@ def tool_get_current_config(st: SessionState) -> Dict[str, Any]:
 
 
 def tool_update_config_value(st: SessionState, path: str, value_yaml: str) -> Dict[str, Any]:
+    value = yaml.safe_load(value_yaml)
     if st.current_cfg_obj is None:
-        raise ValueError("No current config loaded.")
+        return {
+        "success": False,
+        "updated_path": path,
+        "new_value": value,
+        "error": "No current config loaded. Please load a config before updating values.",
+    }
+    if path not in ALLOWED_CONFIG_UPDATE_PATHS:
+        return {
+        "success": False,
+        "updated_path": path,
+        "new_value": value,
+        "error": f"Unsupported config path. Allowed paths: \
+        {', '.join(ALLOWED_CONFIG_UPDATE_PATHS)}",
+    }
     value = yaml.safe_load(value_yaml)
     set_nested_key(st.current_cfg_obj, path, value)
     st.current_cfg_yaml = yaml_dump(st.current_cfg_obj)
@@ -455,6 +511,7 @@ def run_agent_once(
     st.current_cfg_obj = cfg_obj
     st.current_cfg_yaml = yaml_text
     st.current_run_dir = cfg_obj.get("run", {}).get("run_dir", st.current_run_dir) # read from config or none
+    st.current_run_dir = Path(st.current_run_dir) if st.current_run_dir else None 
 
     # 2) Append user message to UI chat history
     chat_history = chat_history or []

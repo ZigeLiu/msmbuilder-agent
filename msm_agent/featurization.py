@@ -80,11 +80,11 @@ def _load_feature(cfg: dict, run_dir: Path):
         if feature_type == "angle":
             assert len(feature_selection) > 1, "Must specify at least two angle types"
             assert all(angle_feature in ["phi", "psi", "chi1", "chi2", "chi3", "chi4", "omega"] \
-                        for angle_feature in feature_selection), "Unsupported angle type"
+                        for angle_feature in feature_selection), f"Unsupported angle type: {feature_selection}. Supported: phi, psi, chi1, chi2, chi3, chi4, omega"
         elif feature_type == "distance":
-            assert feature_selection in ["distances", "displacements", "neighbors"], "Unsupported distance type"
+            assert feature_selection in ["distances", "displacements", "neighbors"], f"Unsupported distance type: {feature_selection}. Supported: distances, displacements, neighbors"
         else:
-            raise ValueError(f"Unsupported feature type: {feature_type}")
+            raise ValueError(f"Unsupported feature type: {feature_type}. Supported: angle, distance")
         featurizer = _find_featurizer(frame, feature_selection, atom_selection)
         assert featurizer is not None, f"Could not find featurizer for selection: {feature_selection}, {atom_selection}"
 
