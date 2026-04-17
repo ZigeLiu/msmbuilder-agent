@@ -604,7 +604,7 @@ def run_agent_once(
 # UI
 # ----------------------------
 def build_app():
-    with gr.Blocks(title="MSM Agent MVP") as demo:
+    with gr.Blocks(title="MSMbuilder Agent") as demo:
         st = gr.State(SessionState())
 
         gr.Markdown("## MSM building agent \nLLM-empowered molecular dynamics simulation analysis tool")
@@ -614,10 +614,9 @@ def build_app():
                 chat = gr.Chatbot(label="Chat", height=560)
                 user_in = gr.Textbox(
                     label="Message",
-                    placeholder='Examples: "run featurization", "rerun with current config", "ok continue", "set selected tica lagtime to 3 and run tica scan"',
+                    placeholder='Examples: "run featurization", "rerun with current config", "set selected tica lagtime to 3 and run tica scan"',
                 )
                 btn_send = gr.Button("Send")
-                #latest_image = gr.Image(label="Output figure", type="filepath", height=420) 
                 latest_image = gr.Gallery(label="Output figure", columns=1, height="500", object_fit="contain")
 
             with gr.Column(scale=1):
@@ -627,9 +626,6 @@ def build_app():
                     value=init_default_config(),
                 )
                 latest_summary = gr.Textbox(label="Latest summary", lines=12)
-                #current_run_dir = gr.Textbox(label="Current run dir")
-                #latest_image = gr.Image(label="Output figure", type="filepath", height=320) ########## what happen if two out #######################
-                #out_image = gr.Gallery(label="Visualized results").style(grid=[1], height="auto")
 
         btn_send.click(
             fn=run_agent_once,
