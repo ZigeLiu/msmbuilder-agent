@@ -30,8 +30,9 @@ def build_stage1_summary(
             f"Trajectory length range (frames): min={min(traj_lens)}, max={max(traj_lens)}"
         )
     uniq_dims = sorted({d for d in feature_dims if d is not None})
-    if uniq_dims:
+    if uniq_dims < 5:
         lines.append(f"Feature dimension(s): {uniq_dims}")
+        lines.append("Warning: Feature dimension is already low, skip stage 2 or use a different set of features.")
 
     lines += [
         f"Saved features: {run_dir / 'features'}",
@@ -61,11 +62,13 @@ def build_stage2_summary(
     ]
     if not all(plateau_check["plateaued"]):
         lines += [
-            "Warning: ITS not plateaued for some components. This may indicate that the scaned tICA lag time is too short. Consider increasing the lag time range and rerunning Stage 2.",
+            "Warning: ITS not plateaued for some components. This may indicate that the lag times in the scan are too short to capture the slow dynamics.",
         ]
     lines += [
         "",
-        "Please review the ITS curve. You can keep the current scan settings, change scan parameters, or set final tICA parameters for Stage 3.",
+        "Please review the ITS curve. ",
+        "Set selected_lag_time based on the minimal lag time that produces a plateau.",
+        "Set selected_n_components based on the largest timescale separation."
     ]
     return "\n".join(lines)
 
@@ -90,7 +93,7 @@ def build_stage3_summary(
 
     lines += [
         "",
-        "Please review the final tICA embedding. If it looks reasonable, you can proceed to clustering in the next phase.",
+        "Please review the final tICA embedding.",
     ]
     return "\n".join(lines)
 
@@ -132,15 +135,15 @@ def build_stage5_summary(
 
     for s in sparsity:
         if s["disconnected"] > 0:
-            lines.append(f"Sparsity warning: {s['disconnected']} disconnected states found at lag {s['lagtime']} frames")
+            lines.append(f"Sparsity warning: {s['disconnected']} disconnected states found at lag {s['lagtime']} frames. \
+                         Try decreasing the MSM lag time or reducing the number of clusters")
     for i, p in enumerate(its_plateau["plateaued"]):
         if not p:
-            lines.append(f"ITS warning: ITS not plateaued for {i+1} timescales")
+            lines.append(f"ITS warning: ITS not plateaued for {i+1} timescales, consider increasing the MSM lag time.")
 
     lines += [
         "",
-        "Please review the MSM quality metrics. If there are sparsity warnings, try decreasing the MSM lag time or reducing the number of clusters.",
-        "If there are ITS warnings, consider increasing the MSM lag time . After adjusting parameters, rerun Stage 5.",
+        "Please review the MSM quality metrics. Please adjust parameters as needed and rerun Stage 5.",
     ]
     return "\n".join(lines)
 
@@ -177,7 +180,14 @@ def build_stage7_summary(
         f"Number of macrostates: {macro_occupancy['n_clusters']}",
         f"Macrostate populations: {macro_occupancy['occupancies']}",
         f"Captured timescales (ns): {ts}",
-        "",
-        "Please review the macrostate analysis results. You can adjust lumping parameters and rerun Stage 7 if needed.",
+    ]
+    if macro_occupancy['tiny_frac'] > 0.2:
+        lines += [
+            "Warning: A large fraction of macrostates are tiny, which may indicate that the lumping is too fine-grained.",
+            "Consider reducing n_macrostates or adjusting lumping parameters.",
+        ]
+    lines += [
+            "",
+            "Please review the macrostate analysis results. You can adjust lumping parameters and rerun Stage 7 if needed.",
     ]
     return "\n".join(lines)

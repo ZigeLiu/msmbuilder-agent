@@ -10,7 +10,6 @@ import gradio as gr
 import yaml
 from openai import OpenAI
 
-# ===== Adjust imports to your real project layout =====
 from msm_agent.stage import (
     run_stage1_featurization,
     run_stage2_tica_scan,
@@ -20,6 +19,7 @@ from msm_agent.stage import (
     run_stage6_msm_fit,
     run_stage7_lumpeval 
 )
+from msm_agent.featurizationv1 import decide_feature_selection
 
 
 # ----------------------------
@@ -252,6 +252,19 @@ TOOLS = [
     },
     {
         "type": "function",
+        "name": "decide_feature",
+        "description": "Decide feature type and selection based on input topology and user message before stage 1.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_message": {"type": "string"},
+            },
+            "required": [],
+            "additionalProperties": False,
+        },  
+    },
+    {
+        "type": "function",
         "name": "run_stage1_featurization",
         "description": "Run Stage 1: load data and featurize.",
         "parameters": {
@@ -363,7 +376,6 @@ def tool_update_config_value(st: SessionState, path: str, value_yaml: str) -> Di
         "error": f"Unsupported config path. Allowed paths: \
         {', '.join(ALLOWED_CONFIG_UPDATE_PATHS)}",
     }
-    value = yaml.safe_load(value_yaml)
     set_nested_key(st.current_cfg_obj, path, value)
     st.current_cfg_yaml = yaml_dump(st.current_cfg_obj)
     return {
@@ -371,6 +383,21 @@ def tool_update_config_value(st: SessionState, path: str, value_yaml: str) -> Di
         "updated_path": path,
         "new_value": value,
     }
+
+def tool_decide_feature(st: SessionState, user_message):
+    cfg = st.current_cfg_obj
+    decision = decide_feature_selection(cfg, user_message)
+    feature_dict = decision['feature']
+    for name, val in feature_dict['parameters'].items():
+        result = tool_update_config_value(st, f"features.{name}", yaml_dump(val))
+        if not result["success"]:
+            return result
+    return {
+        "success": True,
+        "decision": decision['feature'],
+        "reasoning": decision['reason'],
+    }
+
 
 def tool_run_stage(st: SessionState, stage: int) -> Dict[str, Any]:
     if st.current_cfg_obj is None:
@@ -419,6 +446,8 @@ def execute_tool(st: SessionState, name: str, args: Dict[str, Any]) -> Dict[str,
             path=args["path"],
             value_yaml=args["value_yaml"],
         )
+    elif name == "decide_feature":
+        result = tool_decide_feature(st, yaml_dump(args.get("user_message", "")))
     elif name in {"run_stage1", "run_stage1_featurization"}:
         result = tool_run_stage(st, 1)
     elif name in {"run_stage2", "run_stage2_tica_scan"}:
@@ -537,7 +566,7 @@ def run_agent_once(
     ] + to_llm_messages(chat_history)
 
 
-    # 4) Initial model call
+    # 4) Initial model call, tool routing or final response
     response = CLIENT.responses.create(
         model=MODEL,
         input=input_msgs,

@@ -21,7 +21,11 @@ Stage 7: kinetic lumping into a few states and model evaluation, microstate MSM 
 
 
 # Setup
-Install MSMbuilder first following [MSMbuilder documentation](https://github.com/msmbuilder/msmbuilder2022).
+If working with conda, directly running setup.sh will create new environment, install all required packages and setup API key. Please add your api key before running.
+```
+bash setup.sh
+```
+If using other platforms, manual installation as following. Install MSMbuilder first following [MSMbuilder documentation](https://github.com/msmbuilder/msmbuilder2022).
 Clone the agent repo and go to the folder. Create new virtual environment and install package, and set LLM API key for openai/google in your terminal.
 ```
 pip install .

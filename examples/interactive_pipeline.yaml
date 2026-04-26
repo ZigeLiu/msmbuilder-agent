@@ -5,16 +5,16 @@ run:
   run_dir: null
 
 data:
-  kind: "xtc"
+  kind: xtc
   dir: "data/ala2_test_data"
   topology: "data/ala2_test_data/ala2.pdb"
   saving_interval: 1
   stride: 1
 
 features:
-  type: "distance"
-  selection: "distances"
-  atom_selection: "HEAVY"
+  type: distance
+  selection: distances
+  atom_selection: HEAVY
 
 tica:
   lag_time_frames_range: [1, 50]
