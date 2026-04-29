@@ -25,7 +25,7 @@ If working with conda, directly running setup.sh will create new environment, in
 ```
 bash setup.sh
 ```
-If using other platforms, manual installation is as follows. Install MSMbuilder first following [MSMbuilder documentation](https://github.com/msmbuilder/msmbuilder2022).
+If using other platforms, manual installation is as follows: Install MSMbuilder first by following [MSMbuilder documentation](https://github.com/msmbuilder/msmbuilder2022).
 Clone the agent repo and go to the folder. Create new virtual environment and install package, and set LLM API key for openai/google in your terminal.
 ```
 pip install .
