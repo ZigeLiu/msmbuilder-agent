@@ -32,7 +32,7 @@ pip install .
 export OPENAI_API_KEY=your_api_key_here
 export GOOGLE_API_KEY=your_api_key_here
 ```
-If running with local LLM with ollama, please make sure your ollama server has been launched in another terminal. Change model name in agent_ollama.py to the model you are using.  
+If running a local LLM via Ollama, please make sure the Ollama server is running in another terminal. Change the model name in agent_ollama.py to the model you are using.  
 Running the agent.
 ```
 python agent_openai.py
