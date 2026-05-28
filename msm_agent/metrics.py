@@ -5,7 +5,7 @@ from msmbuilder.decomposition import tICA
 from msmbuilder.msm import MarkovStateModel
 from msm_agent.ck_test import remaining_probability_from_model, remaining_probability_from_data, \
     get_data_standard_error, get_model_standard_error, evaluate_ck_pass, plot_ck_test
-from parameters import Metric_param
+from msm_agent.parameters import Metric_param
 
 def compute_occupancy_stats(assign_1d: np.ndarray, n_clusters: int) -> dict:
     assign_1d = np.asarray(assign_1d).reshape(-1)

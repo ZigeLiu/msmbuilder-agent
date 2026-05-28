@@ -373,7 +373,6 @@ def run_stage4_cluster(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, An
         plot_occupancy_hist(
             occ_stats["occupancies"],
             outpath=run_dir / "figs" / "occupancy_hist.png",
-            min_occupancy=int(cfg["evaluation"]["min_occupancy"]),
         )
     except (ValueError, AssertionError) as e:
         traceback.print_exc()
@@ -460,9 +459,7 @@ def run_stage5_msm_scan(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, A
     
         plateau_check = its_plateau_check(its, 
                                     lag_list=lag_list.tolist(),
-                                    top_k=cfg["evaluation"]["plateau_k"], 
-                                    threshold=float(cfg["evaluation"]["plateau_threshold"]),
-                                    last_step=int(cfg["evaluation"]["plateau_last_step"]),
+                                    #top_k=cfg["evaluation"]["plateau_k"], 
                                     )
     except (ValueError, AssertionError) as e:
         traceback.print_exc()

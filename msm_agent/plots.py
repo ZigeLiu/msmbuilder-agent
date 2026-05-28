@@ -38,11 +38,11 @@ def plot_free_energy(x, y, weights, mdl, outpath, bins=90, centers=None):
     plt.savefig(outpath, dpi=200)
     plt.close()
 
-def plot_occupancy_hist(occupancies, outpath, min_occupancy=10):
+def plot_occupancy_hist(occupancies, outpath):
     occ = np.asarray(occupancies, dtype=float)
     plt.figure()
     plt.hist(occ, bins=50)
-    plt.axvline(min_occupancy, linestyle="--")
+    #plt.axvline(min_occupancy, linestyle="--")
     plt.xlabel("Microstate occupancy (#frames)")
     plt.ylabel("Count")
     plt.tight_layout()
