@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import numpy as np
@@ -10,6 +8,7 @@ def build_stage1_summary(
     n_trajs: int,
     traj_lens: List[int],
     feature_dims: List[Optional[int]],
+    contact_test:Dict[str, Any],
     dt_ps_effective: float,
 ) -> str:
     data_cfg = cfg.get("data", {})
@@ -22,22 +21,33 @@ def build_stage1_summary(
         f"Number of trajectories: {n_trajs}",
         f"Effective timestep: {dt_ps_effective:.4f} ps",
         f"Feature type: {feat_cfg.get('type', 'NA')}",
-        f"Feature selection: {feat_cfg.get('selection', 'NA')}",
-        f"Atom selection: {feat_cfg.get('atom_selection', 'NA')}",
     ]
+    if feat_cfg.get('selection'):
+        lines.append(f"Feature selection: {feat_cfg.get('selection')}")
+        lines.append(f"Atom selection: {feat_cfg.get('atom_selection')}")
+    if feat_cfg.get('pair_selection'):
+        lines.append(f"Pair selection: {feat_cfg.get('pair_selection')}")
     if traj_lens:
         lines.append(
             f"Trajectory length range (frames): min={min(traj_lens)}, max={max(traj_lens)}"
         )
-    uniq_dims = sorted({d for d in feature_dims if d is not None})
-    if uniq_dims < 5:
-        lines.append(f"Feature dimension(s): {uniq_dims}")
+    uniq_dims = np.unique(feature_dims)
+    lines.append(f"Feature dimension(s): {uniq_dims}")
+    if len(uniq_dims) > 1:
+        lines.append(f"Warning: Feature dimensions are not consistent, have {uniq_dims}")
+    elif uniq_dims[0] < 5:
         lines.append("Warning: Feature dimension is already low, skip stage 2 or use a different set of features.")
-
+    if contact_test:
+        lines.append(f"Fraction of pairs in contact: {contact_test.get('in_contact_fraction', 'NA')}")
+        if contact_test.get("in_contact_fraction", 0) < 0.1:
+            lines.append("Warning: Low fraction of frames with contacts, may be due to a small distance cutoff or a large set of distances.")
+            lines.append("Warning: First consider increasing the distance cutoff")
+            lines.append(f"Warning: Or set features.pair_selection to '{run_dir} / in_contact_pairs_{contact_test['dist_cutoff']}_{contact_test['contact_freq_cutoff']}.npy'.")
+    
     lines += [
         f"Saved features: {run_dir / 'features'}",
         "",
-        "Please review whether this featurization is acceptable. You can keep it or modify feature-related config and rerun Stage 1.",
+        "Please review featurization results. Address all warning messages before proceeding.",
     ]
     return "\n".join(lines)
 
@@ -52,7 +62,7 @@ def build_stage2_summary(
 ) -> str:
     tica_cfg = cfg.get("tica", {})
     lines = [
-        "Stage 2 completed: tICA lag scan finished.",
+        "Stage 2 completed: tICA parameter scan finished.",
         f"Run dir: {run_dir}",
         f"Scan lag range (in frames): {lag_list[0]} to {lag_list[-1]}",
         f"Scan n_components: {tica_cfg.get('n_components', 'NA')}",
@@ -62,13 +72,17 @@ def build_stage2_summary(
     ]
     if not all(plateau_check["plateaued"]):
         lines += [
-            "Warning: ITS not plateaued for some components. This may indicate that the lag times in the scan are too short to capture the slow dynamics.",
+            "Warning: ITS not plateaued for some components. This indicates that the lag times in the scan maybe too short to be markovian.",
+            "Warning: Try increasing the lag time range and rerun stage 2"
+        ]
+    else: 
+        lines += [
+            f"Recommendation: ITS plateaued for selected components, recommended selected_lag_time for proceed: {plateau_check['min_lag']}.",
+            f"Recommendation: recommended selected_n_component for proceed: {plateau_check['separated_component']}"
         ]
     lines += [
         "",
-        "Please review the ITS curve. ",
-        "Set selected_lag_time based on the minimal lag time that produces a plateau.",
-        "Set selected_n_components based on the largest timescale separation."
+        "Please review the ITS curve for tICA parameter scan. Address all warning messages before proceeding",
     ]
     return "\n".join(lines)
 
@@ -93,7 +107,7 @@ def build_stage3_summary(
 
     lines += [
         "",
-        "Please review the final tICA embedding.",
+        "Please review the final tICA embeddings. Address all warning messages before proceeding",
     ]
     return "\n".join(lines)
 
@@ -112,21 +126,21 @@ def build_stage4_summary(
         f"Occupied clusters: {occupancy['n_used']} out of {occupancy['n_clusters']} total clusters",
         f"Tiny clusters (occupancy < {cl_cfg.get('tiny_threshold', 10)}): {occupancy['tiny_frac']:.4f} fraction",
     ]
-    if occupancy['tiny_frac'] > 0.2:
+    if occupancy['tiny_flag']:
         lines += [
             "Warning: A large fraction of clusters are tiny, which may indicate that the clustering is too fine-grained.",
-            "Consider reducing n_clusters or adjusting clustering parameters.",
+            "Warning: Consider reducing n_clusters or adjusting clustering parameters.",
         ]
     lines += [
         "",
-        "Please review the clustering results. You can keep the current clustering settings or modify clustering-related config and rerun Stage 4.",
+        "Please review the clustering results. Address all warning messages before proceeding",
     ]
     return "\n".join(lines)
 
 def build_stage5_summary(
     run_dir: Path,
     sparsity: List[Dict[str, Any]],
-    its_plateau: Dict[str, Any],
+    plateau_check: Dict[str, Any],
 ) -> str:
     lines = [
         "Stage 5 completed: MSM scanning finished.",
@@ -135,15 +149,22 @@ def build_stage5_summary(
 
     for s in sparsity:
         if s["disconnected"] > 0:
-            lines.append(f"Sparsity warning: {s['disconnected']} disconnected states found at lag {s['lagtime']} frames. \
+            lines.append(f"Warning: {s['disconnected']} disconnected states found at lag {s['lagtime']} frames. \
                          Try decreasing the MSM lag time or reducing the number of clusters")
-    for i, p in enumerate(its_plateau["plateaued"]):
-        if not p:
-            lines.append(f"ITS warning: ITS not plateaued for {i+1} timescales, consider increasing the MSM lag time.")
-
+   
+    if not all(plateau_check["plateaued"]):
+        lines += [
+            "Warning: ITS not plateaued for some components. This indicates that the lag times in the scan maybe too short to be markovian.",
+            "Warning: Try increasing the lag time range and rerun stage 5"
+        ]
+    else: 
+        lines += [
+            f"Recommendation: ITS plateaued for selected components, recommended selected_lag_time for proceed: {plateau_check['min_lag']}.",
+            f"Recommendation: recommended selected_n_component for proceed: {plateau_check['separated_component']}"
+        ]
     lines += [
         "",
-        "Please review the MSM quality metrics. Please adjust parameters as needed and rerun Stage 5.",
+        "Please review the MSM quality metrics. Address all warning messages before proceeding.",
     ]
     return "\n".join(lines)
 
@@ -161,11 +182,12 @@ def build_stage6_summary(
     if not ck_test_results["pass"]:
         lines += [
             "Warning: CK test failed, which may indicate that the MSM does not capture the kinetics well.",
-            "Consider adjusting MSM parameters (e.g. lag time, n_timescales) and rerunning Stage 5 and Stage 6.",
+            "Warning: Consider adjusting MSM parameters (e.g. lag time, n_timescales) and rerunning Stage 5 and Stage 6.",
         ]
     lines += [
         "",
-        "Please review the MSM test results. Note that the estimated timescales will be slower after lumping.",
+        "Please review the MSM test results. Address all warning messages before proceeding.",
+        "Note that the estimated timescales will be slower after lumping.",
     ]
     return "\n".join(lines)
 
@@ -184,10 +206,10 @@ def build_stage7_summary(
     if macro_occupancy['tiny_frac'] > 0.2:
         lines += [
             "Warning: A large fraction of macrostates are tiny, which may indicate that the lumping is too fine-grained.",
-            "Consider reducing n_macrostates or adjusting lumping parameters.",
+            "Warning: Consider reducing n_macrostates or adjusting lumping parameters.",
         ]
     lines += [
             "",
-            "Please review the macrostate analysis results. You can adjust lumping parameters and rerun Stage 7 if needed.",
+            "Please review the macrostate analysis results. Address all warning messages before proceeding.",
     ]
     return "\n".join(lines)

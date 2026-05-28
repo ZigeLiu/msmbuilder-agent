@@ -148,17 +148,19 @@ SYSTEM_PROMPT = """You are an MSM building agent for a multi-stage molecular dyn
 Your role:
 - Help the user sequentially run thorugh Stages.
 - Each stage have their specific tasks:
-  1) Stage 1: featurization
-  2) Stage 2: tICA parameter scan
-  3) Stage 3: fit tICA with selected parameters
-  4) Stage 4: cluster data points according to tica collevtive variables
-  5) Stage 5: scan parameters to build markov state model with cluter labels
-  6) Stage 6: build markov state model with cluster labels
-  7) Stage 7: lump clusters acording to transitions and evaluate model
-- If the user asks to modify config, use update_config_value first, then rerun the relevant stage.
+  1) Decide feature: inspect topology and user message and decide feature type and selection
+  2) Stage 1: featurization
+  3) Stage 2: tICA parameter scan
+  4) Stage 3: fit tICA with selected parameters
+  5) Stage 4: cluster data points according to tica collevtive variables
+  6) Stage 5: scan parameters to build markov state model with cluter labels
+  7) Stage 6: build markov state model with cluster labels
+  8) Stage 7: lump clusters acording to transitions and evaluate model
+- If deciding feature, only call decide_feature tool, do not call update_config_value.
+- If asked to modify config, use update_config_value first, then rerun the relevant stage.
 - Do not rewrite the whole YAML unless necessary. Prefer update_config_value.
-- After each tool result, summarize clearly and ask the user what they want to do next.
-- If tool call results is not success, inspect errors in result and include possible reasons in your responses.
+- After each tool result, summarize clearly and suggest on what to do next.
+- If tool call is not success, inspect errors in result and include possible reasons in your responses.
 - Provide parameter tuning suggestions when receiving hints. 
 
 Important rules:
@@ -186,6 +188,7 @@ ALLOWED_CONFIG_UPDATE_PATHS = [
     "features.type",
     "features.selection",
     "features.atom_selection",
+    "features.pair_selection",
     "tica.lag_time_frames_range",
     "tica.lag_time_frames_grid_size",
     "tica.n_components",
@@ -361,6 +364,7 @@ def tool_get_current_config(st: SessionState) -> Dict[str, Any]:
 
 def tool_update_config_value(st: SessionState, path: str, value_yaml: str) -> Dict[str, Any]:
     value = yaml.safe_load(value_yaml)
+    st.current_stage = "config_update"
     if st.current_cfg_obj is None:
         return {
         "success": False,
@@ -386,6 +390,7 @@ def tool_update_config_value(st: SessionState, path: str, value_yaml: str) -> Di
 
 def tool_decide_feature(st: SessionState, user_message):
     cfg = st.current_cfg_obj
+    st.current_stage = "decide_feature"
     decision = decide_feature_selection(cfg, user_message)
     feature_dict = decision['feature']
     for name, val in feature_dict['parameters'].items():

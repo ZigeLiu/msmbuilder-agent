@@ -15,7 +15,7 @@ from msmbuilder.msm import MarkovStateModel
 import msmbuilder.lumping as lump_module
 
 # ===== Adjust these imports to your real project layout =====
-from msm_agent.featurization import (
+from msm_agent.featurizationv1 import (
     _make_run_dir,
     _load_feature,
     _save_intermediate,
@@ -33,7 +33,8 @@ from msm_agent.summary import (
 )
 from msm_agent.metrics import (
     compute_msm_its, 
-    compute_tica_its, 
+    compute_tica_its,
+    in_contact_test, 
     its_plateau_check, 
     compute_occupancy_stats,
     compute_transition_sparsity,
@@ -96,6 +97,7 @@ def run_stage1_featurization(cfg: Dict[str, Any], run_dir: Path = None) -> Dict[
         run_dir = _make_run_dir(cfg)
 
     try:
+        # priority: processed, pair selection, atom selection
         features, dt_ps_effective = _load_feature(cfg, run_dir)
         traj_lens = [len(x) for x in features]
         feature_dims = [
@@ -126,6 +128,9 @@ def run_stage1_featurization(cfg: Dict[str, Any], run_dir: Path = None) -> Dict[
                 "hint": "Error using tool. The agent should modify tool choice."
             }],
         }
+    dist_cutoff = float(cfg["features"].get("distance_cutoff", 0.8))
+    freq_cutoff = float(cfg["evaluation"].get("contact_freq_cutoff", 0.1))
+    contact_test = in_contact_test(run_dir, dist_cutoff, freq_cutoff) # return dict or empty
 
     manifest = {
         "stage": "stage1_featurization",
@@ -136,6 +141,7 @@ def run_stage1_featurization(cfg: Dict[str, Any], run_dir: Path = None) -> Dict[
         "traj_lens": traj_lens,
         "feature_dims": np.unique(feature_dims).tolist(),
         "feature_dir": str(run_dir / "features"),
+        "in_contact_fraction": contact_test.get("in_contact_fraction", "Do not apply"),
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     write_json(manifest, run_dir / "stage1_manifest.json")
@@ -146,6 +152,7 @@ def run_stage1_featurization(cfg: Dict[str, Any], run_dir: Path = None) -> Dict[
         n_trajs=len(features),
         traj_lens=traj_lens,
         feature_dims=feature_dims,
+        contact_test=contact_test,
         dt_ps_effective=float(dt_ps_effective),
     )
 
@@ -229,9 +236,7 @@ def run_stage2_tica_scan(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, 
     }
     write_json(manifest, run_dir / "stage2_manifest.json")
     
-    top_k=int(cfg["evaluation"]["plateau_k"]) if cfg["evaluation"]["plateau_k"] is not None else None
-    plateau_check = its_plateau_check(tica_its, lag_list.tolist(), top_k=top_k, \
-                        threshold=float(cfg["evaluation"]["plateau_threshold"]), last_step=int(cfg["evaluation"]["plateau_last_step"]))
+    plateau_check = its_plateau_check(tica_its, lag_list.tolist())
 
     summary = build_stage2_summary(
         cfg=cfg,
@@ -364,7 +369,7 @@ def run_stage4_cluster(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, An
 
         micro_assign = np.concatenate([np.asarray(t).reshape(-1) for t in clustered_trajs])
 
-        occ_stats = compute_occupancy_stats(micro_assign, **cl_cfg)
+        occ_stats = compute_occupancy_stats(micro_assign, n_clusters=int(cl_cfg["n_clusters"]))
         plot_occupancy_hist(
             occ_stats["occupancies"],
             outpath=run_dir / "figs" / "occupancy_hist.png",
@@ -441,9 +446,9 @@ def run_stage5_msm_scan(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, A
             clustered_trajs=clustered_trajs,
             lag_list=lag_list,
             n_timescales=int(msm_cfg["n_timescales"]),
+            dt_ns=dt_ns,
             reversible_type=msm_cfg["reversible_type"],
             ergodic_cutoff=float(msm_cfg["ergodic_cutoff"]),
-            dt_ns=dt_ns,
         )
         plot_its_curve(
             its,
@@ -453,7 +458,7 @@ def run_stage5_msm_scan(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, A
         # check msm quality
         sparsity = compute_transition_sparsity(clustered_trajs, n_states = len(all_state), lagtimes=lag_list.tolist()) 
     
-        its_plateau = its_plateau_check(its, 
+        plateau_check = its_plateau_check(its, 
                                     lag_list=lag_list.tolist(),
                                     top_k=cfg["evaluation"]["plateau_k"], 
                                     threshold=float(cfg["evaluation"]["plateau_threshold"]),
@@ -498,7 +503,7 @@ def run_stage5_msm_scan(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, A
     summary = build_stage5_summary(
         run_dir=run_dir,
         sparsity=sparsity,
-        its_plateau=its_plateau,
+        plateau_check=plateau_check,
     )
     return {
         "success": True,
@@ -529,8 +534,7 @@ def run_stage6_msm_fit(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, An
         msm = MarkovStateModel(lag_time=int(selected_lag_time), n_timescales=int(selected_n_timescales), 
                                reversible_type=msm_cfg.get("reversible_type",'transpose'), ergodic_cutoff=float(msm_cfg.get("ergodic_cutoff", 0.0)))
         msm.fit(clustered_trajs)
-        ck_results = ck_test(msm, clustered_trajs, num_states=int(cfg['evaluation']['ck_test_states']), plot_dir=run_dir / "figs" ,\
-                              plot_only=cfg['evaluation']['ck_plot_only'], n_steps=int(cfg["evaluation"]["ck_test_steps"]))
+        ck_results = ck_test(msm, clustered_trajs, num_states=int(cfg['evaluation']['ck_test_states']), plot_dir=run_dir / "figs")
         tics = load_processed_from_run_dir(run_dir, "tica_trajs")
         txx = np.concatenate(tics, axis=0)
         weights = msm.populations_[np.concatenate(clustered_trajs)]

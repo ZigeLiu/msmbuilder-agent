@@ -15,6 +15,8 @@ features:
   type: distance
   selection: distances
   atom_selection: HEAVY
+  pair_selection: null
+  distance_cutoff: 0.8
 
 tica:
   lag_time_frames_range: [1, 50]
@@ -41,10 +43,5 @@ plots:
   gridsize: 120
 
 evaluation:
-  plateau_k: null
-  plateau_threshold: 0.1
-  plateau_last_step: 4
-  min_occupancy: 10
-  ck_plot_only: False
-  ck_test_steps: 4
+  contact_freq_cutoff: 0.1
   ck_test_states: 6

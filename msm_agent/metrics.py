@@ -5,14 +5,19 @@ from msmbuilder.decomposition import tICA
 from msmbuilder.msm import MarkovStateModel
 from msm_agent.ck_test import remaining_probability_from_model, remaining_probability_from_data, \
     get_data_standard_error, get_model_standard_error, evaluate_ck_pass, plot_ck_test
+from parameters import Metric_param
 
-def compute_occupancy_stats(assign_1d: np.ndarray, n_clusters: int, tiny_threshold: int=10, **kwargs) -> dict:
+def compute_occupancy_stats(assign_1d: np.ndarray, n_clusters: int) -> dict:
     assign_1d = np.asarray(assign_1d).reshape(-1)
     occ = np.bincount(assign_1d, minlength=n_clusters)
+    tiny_threshold = Metric_param.occupancy_tiny_threshold
+    tiny_frac_threshold = Metric_param.occupancy_tiny_frac_threshold
+    tiny_frac = float(np.mean(occ < tiny_threshold))
     return {
         "n_clusters": int(n_clusters),
         "n_used": int(np.sum(occ > 0)),
-        "tiny_frac": float(np.mean(occ < tiny_threshold)),
+        "tiny_frac": float(tiny_frac),
+        "tiny_flag": bool(tiny_frac > tiny_frac_threshold),
         "occupancies": occ.tolist(),
     }
 
@@ -47,17 +52,19 @@ def compute_tica_its(features, lag_list, n_components: int, dt_ns: float) -> dic
         table[str(lag*dt_ns)] = (ts * dt_ns).tolist()
     return table 
 
-def compute_msm_its(clustered_trajs, lag_list, n_timescales: int, reversible_type: str, ergodic_cutoff: float, dt_ns: float) -> dict:
+def compute_msm_its(clustered_trajs, lag_list, n_timescales: int, dt_ns: float, reversible_type=Metric_param.msm_reversible_type, ergodic_cutoff=Metric_param.msm_ergodic_cutoff) -> dict:
     table = {}
     for lag in lag_list:
-        msm = MarkovStateModel(lag_time=int(lag), n_timescales=int(n_timescales), reversible_type=reversible_type, ergodic_cutoff=float(ergodic_cutoff))
+        msm = MarkovStateModel(lag_time=int(lag), n_timescales=int(n_timescales),\
+                                    reversible_type=reversible_type, ergodic_cutoff=ergodic_cutoff)
         msm.fit(clustered_trajs)
         ts = np.asarray(msm.timescales_, dtype=float)
         assert len(ts) >= n_timescales, f"MSM at lag {lag} has only {len(ts)} timescales, less than n_timescales={n_timescales}, try decreasing n_timescales or lagtime."
         table[str(lag*dt_ns)] = (ts * dt_ns).tolist()
     return table
 
-def its_plateau_check(its: dict, lag_list: list, top_k: int = None, threshold: float = 0.1, last_step: int = 4) -> dict:
+def its_plateau_check(its: dict, lag_list: list, top_k=Metric_param.plateau_top_k, \
+                      threshold=Metric_param.plateau_threshold, last_step=Metric_param.plateau_last_steps, separate_cutoff=Metric_param.plateau_separate_cutoff) -> dict:
     top_k = -1 if top_k is None else top_k
     timescales = []
     for key, val in its.items():
@@ -65,87 +72,55 @@ def its_plateau_check(its: dict, lag_list: list, top_k: int = None, threshold: f
             raise ValueError(f"ITS for lag {key} has only {len(val)} timescales, less than top_k={top_k}")
         timescales.append(np.asarray(val[:top_k], dtype=float)) # [num of lag, top k]
     lagstep = np.array(lag_list, dtype=int) # [num of lag]
+    timescales = np.array(timescales)
     # plateau check
     assert len(lagstep) > last_step, f"Need at least {last_step+1} lag times for plateau check, but got {len(lagstep)}"
     d_lag = np.diff(lagstep) 
     d_ts = np.diff(timescales, axis=0) # [num of lag - 1, top k]
     rel_d_ts = np.abs(d_ts / (d_lag.reshape(-1, 1) + 1e-12)) # [num of lag - 1, top k]
-    plateaued = rel_d_ts[-last_step:,] < threshold
+    all_plateaued = rel_d_ts < threshold
+    rev_all_plateaued = ~all_plateaued
+    min_lag = np.max(rev_all_plateaued.sum(1))+1
+    plateaued = all_plateaued[-last_step:, :].all(axis=0) # make sure the time range is long for plateaue
+
+    # TODO: find largest timescale separation
+    timescale_separation = timescales[:,1:] / (timescales[:,:-1] + 1e-12) # [num of lag, top k - 1]
+    timescale_separated_inv = timescale_separation > separate_cutoff # bool of [num of lag, top k -1]
+    separated_component = np.where(timescale_separated_inv.sum(0) > 0)[0][0] # the first non zero in [top k - 1] 
+
     return {
         "top_k": int(top_k),    
+        "min_lag": int(lag_list[min_lag]),
+        "separated_component": int(separated_component),
         "last_step": int(last_step),
-        "plateaued": [p.all() for p in plateaued],
+        "plateaued": plateaued,
     }
 
-def ck_test(mdl, clustered_trajs, num_states: int, plot_dir: Path, plot_only: bool = True, n_steps: int = 4, block_percentage: float = 0.1) -> dict:              
+def ck_test(mdl, clustered_trajs, num_states: int, plot_dir: Path, \
+            plot_only=Metric_param.ck_plot_only, n_steps=Metric_param.ck_n_steps, \
+            block_percentage=Metric_param.ck_block_percentage, n_samples=Metric_param.ck_n_bootstrap, threshold=Metric_param.ck_pass_threshold) -> dict:              
     pop_sort = sorted(range(len(mdl.populations_)), key=lambda k: mdl.populations_[k])
     prob_model = remaining_probability_from_model(num_states, n_steps, len(mdl.state_labels_), mdl.transmat_, pop_sort)
     state_flag, prob_data = remaining_probability_from_data(num_states, n_steps, mdl.lag_time, pop_sort, clustered_trajs)
     data_se = get_data_standard_error(num_states, n_steps, state_flag, block_percentage=block_percentage)
     plot_ck_test(num_states, n_steps, prob_data, data_se, prob_model , plot_dir / "CK_test.png")
     if not plot_only:
-        model_se = get_model_standard_error(num_states, n_steps, clustered_trajs, mdl)
-        eval_results = evaluate_ck_pass(prob_model, prob_data, model_se, data_se)
+        model_se = get_model_standard_error(num_states, n_steps, clustered_trajs, mdl, n_samples=n_samples)
+        eval_results = evaluate_ck_pass(prob_model, prob_data, model_se, data_se, threshold=threshold)
 
     return eval_results if not plot_only else {"plot_only": True}
 
-def grade_run(cfg: dict, occ: dict, sparsity: dict, plat: dict) -> dict:
-    g = cfg["gates"]
-    min_occ = int(g["min_occupancy"])
-    max_tiny_frac = float(g["max_tiny_state_frac"])
-    min_out = float(g["min_avg_out_degree"])
-    plateau_rel = float(g["plateau_rel_var"])
-
-    occupancies = np.asarray(occ["occupancies"], dtype=float)
-    tiny_frac = float(np.mean(occupancies < min_occ))
-    rel_std_max = float(plat["rel_std_max"])
-    avg_out = float(sparsity["avg_out_degree"])
-
-    # MVP grading rules
-    fail_reasons = []
-    warn_reasons = []
-
-    if avg_out < min_out:
-        fail_reasons.append(f"avg_out_degree<{min_out:.1f} (sparse transitions)")
-    if rel_std_max > plateau_rel * 2:
-        fail_reasons.append(f"ITS not stable (rel_std_max={rel_std_max:.2f})")
-
-    if tiny_frac > max_tiny_frac:
-        warn_reasons.append(f"too many tiny states: tiny_frac={tiny_frac:.2f} (> {max_tiny_frac:.2f})")
-    if rel_std_max > plateau_rel and not fail_reasons:
-        warn_reasons.append(f"ITS only weakly stable (rel_std_max={rel_std_max:.2f})")
-
-    if fail_reasons:
-        label = "FAIL"
-    elif warn_reasons:
-        label = "WARN"
+def in_contact_test(run_dir: Path, dist_cutoff: float, freq_cutoff: float) -> dict:
+    contact_path = run_dir / f"contact_freq_{dist_cutoff}.npz"
+    if not contact_path.exists():
+        return {}
     else:
-        label = "PASS"
-
-    return {"label": label, "fail_reasons": fail_reasons, "warn_reasons": warn_reasons,
-            "tiny_frac": tiny_frac, "rel_std_max": rel_std_max, "avg_out_degree": avg_out}
-
-def suggest_fixes(cfg: dict, occ: dict, sparsity: dict, plat: dict) -> list[str]:
-    g = cfg["gates"]
-    min_occ = int(g["min_occupancy"])
-    plateau_rel = float(g["plateau_rel_var"])
-
-    occupancies = np.asarray(occ["occupancies"], dtype=float)
-    tiny_frac = float(np.mean(occupancies < min_occ))
-    rel_std_max = float(plat["rel_std_max"])
-    avg_out = float(sparsity["avg_out_degree"])
-
-    suggestions = []
-
-    if tiny_frac > float(g["max_tiny_state_frac"]):
-        suggestions.append("Reduce n_clusters (e.g., 100→50) OR increase data/stride to reduce sparsity.")
-    if avg_out < float(g["min_avg_out_degree"]):
-        suggestions.append("Increase MSM lag_time (use larger τ) to improve Markovianity and reduce transition noise.")
-    if rel_std_max > plateau_rel:
-        suggestions.append("Try increasing tICA components (4→6/8) and/or increasing MSM lag list to find plateau.")
-        suggestions.append("If still unstable, consider adding contact features (dihedral-only may miss slow modes).")
-
-    if not suggestions:
-        suggestions.append("Model passes MVP gates. Next: CK test + macrostate interpretation + rates/TPT (full agent).")
-
-    return suggestions
+        contact = np.load(contact_path, allow_pickle=True)
+        in_contact = contact['contact_freq'] > freq_cutoff
+        contact_pairs = contact['pairs'][in_contact]
+        np.save(run_dir / f"in_contact_pairs_{dist_cutoff}_{freq_cutoff}.npy", contact_pairs)
+        return {
+            "dist_cutoff": float(dist_cutoff),
+            "contact_freq_cutoff": float(freq_cutoff),
+            "in_contact_fraction": float(np.mean(in_contact)),
+        }

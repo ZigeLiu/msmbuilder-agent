@@ -175,23 +175,29 @@ def decide_feature_selection(cfg: dict, user_request: str = "") -> dict:
 
     return decision
 
-def _find_featurizer(frame, feature_selection, atom_selection, dist_cutoff):
+def _find_featurizer(frame, feature_selection, atom_selection, dist_cutoff, pair_selection=None):
     atom_slice, atom_slice_1, atom_slice_2 = None, None, None
-    try:
-        if len(atom_selection) == 1: # single stom selection
-            atom_slice = " and ".join(f"{x}" for x in atom_selection)
-            atom_slice = frame.topology.select(atom_slice)
-            pairs = list(itertools.combinations(atom_slice, 2))
-        elif len(atom_selection) == 2: # two set of selected atoms
-            atom_slice_1 = " and ".join(f"{x}" for x in atom_selection[0])
-            atom_slice_2 = " and ".join(f"{x}" for x in atom_selection[1])
-            atom_slice_1 = frame.topology.select(atom_slice_1)
-            atom_slice_2 = frame.topology.select(atom_slice_2)
-            pairs = list(itertools.product(atom_slice_1, atom_slice_2))
-        else:
-            raise ValueError(f"atom_selection must be either a single selection or a list of two selections. Got: {atom_selection}")
-    except Exception:
-        raise ValueError(f"Error parsing atom_selection: {atom_selection}. Must be one or two lists of strings compatible with mdtraj's topology.select syntax.")
+    if pair_selection is not None:
+        try:
+            pairs = np.load(pair_selection)
+        except Exception as e:
+            raise ValueError(f"Error loading pair selection file: {pair_selection}. Error: {e}")
+    else:
+        try:
+            if len(atom_selection) == 1: # single stom selection
+                atom_slice = " and ".join(f"{x}" for x in atom_selection)
+                atom_slice = frame.topology.select(atom_slice)
+                pairs = list(itertools.combinations(atom_slice, 2))
+            elif len(atom_selection) == 2: # two set of selected atoms
+                atom_slice_1 = " and ".join(f"{x}" for x in atom_selection[0])
+                atom_slice_2 = " and ".join(f"{x}" for x in atom_selection[1])
+                atom_slice_1 = frame.topology.select(atom_slice_1)
+                atom_slice_2 = frame.topology.select(atom_slice_2)
+                pairs = list(itertools.product(atom_slice_1, atom_slice_2))
+            else:
+                raise ValueError(f"atom_selection must be either a single selection or a list of two selections. Got: {atom_selection}")
+        except Exception as e:
+            raise ValueError(f"Error parsing atom_selection: {atom_selection}. Must be one or two lists of strings compatible with mdtraj's topology.select syntax.")
 
     if feature_selection in ["distances", "displacements"]:
         return partial(getattr(md, f"compute_{feature_selection}"), atom_pairs=pairs), pairs
@@ -221,8 +227,9 @@ def _load_feature(cfg: dict, run_dir: Path):
     feature_type = cfg["features"]["type"]
     feature_selection = cfg["features"]["selection"] # list of angles or single distacne type
     dist_cutoff = float(cfg["features"].get("distance_cutoff", 0.8))
-    atom_selection = cfg["features"].get("atom_selection", None)
     prepossed_dir = cfg["data"].get("load_preprocessed_dir", None)
+    pair_selection = cfg["features"].get("pair_selection", None)
+    atom_selection = cfg["features"].get("atom_selection", None)
 
     if not data_dir or not top:
         raise ValueError("Both data_dir and topology are required for kind=xtc,dcd,trr")
@@ -247,7 +254,7 @@ def _load_feature(cfg: dict, run_dir: Path):
             assert feature_selection in ["distances", "displacements", "neighbors"], f"Unsupported distance type: {feature_selection}. Supported: distances, displacements, neighbors"
         else:
             raise ValueError(f"Unsupported feature type: {feature_type}. Supported: angle, distance")
-        featurizer, pairs = _find_featurizer(frame, feature_selection, atom_selection, dist_cutoff)
+        featurizer, pairs = _find_featurizer(frame, feature_selection, atom_selection, dist_cutoff, pair_selection)
         assert featurizer is not None, f"Could not find featurizer for selection: {feature_selection}, {atom_selection}"
 
         (run_dir / "features").mkdir(exist_ok=True)
@@ -258,11 +265,12 @@ def _load_feature(cfg: dict, run_dir: Path):
             out_file = str(run_dir / "features" / (Path(file).stem + ".npy"))
             np.save(out_file, processed_feature)
             if feature_type == "distance":
-                contact_freq = (processed_feature < dist_cutoff).mean(axis=0)
+                contact_freq = (processed_feature < dist_cutoff).mean(axis=0) # [n_pairs]
                 contact[len(processed_feature)] = contact_freq # dict of traj length to contact frequency for each pair
             loaded_features.append(processed_feature)
-        total_contact_freq = np.mean([int(key) * float(val) for key, val in contact.items()])
-        np.savez(run_dir / f"contact_freq_{dist_cutoff}.npz", contact_freq=total_contact_freq, pairs=pairs)
+        if contact:
+            total_contact_freq = np.mean([int(key) * np.array(val,dtype=float) for key, val in contact.items()]) if contact else None
+            np.savez(run_dir / f"contact_freq_{dist_cutoff}.npz", contact_freq=total_contact_freq, pairs=pairs)
         ################################## retrieve later for feature selection ######################################
     dt_ps = float(cfg["data"]["saving_interval"]) * stride
     return loaded_features, dt_ps
