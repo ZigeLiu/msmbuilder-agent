@@ -2,12 +2,12 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import json
 
-from agent_openai import MODEL, TOOLS, SessionState, ALLOWED_CONFIG_UPDATE_PATHS
+from agent_openai import TOOLS, SessionState, ALLOWED_CONFIG_UPDATE_PATHS
 from agent_openai import execute_tool, to_llm_messages, safe_yaml_load
 
 SYSTEM_PROMPT = "Run MSM construction with the following configuration." \
                 "Start from decide feature selection then move from stage 1 to 7." 
-
+MODEL = "gpt-5.2"
 class SearchController:
     '''
     Controller that manages the pipeline and reviewer agents for MSM construction.
@@ -55,9 +55,8 @@ class SearchController:
         return self.history
     
 class PipelineAgent:
-    def __init__(self, client, tools):
+    def __init__(self, client):
         self.client = client
-        self.tools = tools
         self.st = SessionState()
 
     def run_stage(
@@ -173,7 +172,7 @@ class ReviewerAgent:
             message += f"""
                 Check updated config to make sure they are in the correct format.
                 There are paths that are not allowed: {param_check}.
-                If no path that is not allowed, approve current step. 
+                If all paths are allowed, approve current step. 
                 Otherwise decline current step, correct the format or path name and rerun.
             """
         else:
@@ -193,7 +192,8 @@ class ReviewerAgent:
                 If declining, provide reasons and next step on the decision. 
                 Next step move can be rerun current stage, go back to a certain stage or skip certain stage.
                 If not sure, prefer decline with reason and rerun current stage with slightly tuned parameters. 
-                If approving and already at stage 7, stop the building procedure. 
+                If repeatedly declining same stage, try going back to previous stage to adjust parameters or features.
+                For stage 5, passing CK test but outside of 95 confidence interval can be approved if 3 reruns with adjusted parameters show the same result.
                 Current stage: {stage}
                 Current parameters: {params}
                 Current review: {review}
@@ -201,13 +201,13 @@ class ReviewerAgent:
             """
 
         response = self.client.responses.create(
-            model="gpt-5.3",
+            model=MODEL,
             input=message,
         )
-        # TODO: customized output format {'message':,'decision':summarize the message}
         decision = response.output_text.split(' |')[0]
+        message = response.output_text.split(' |')[1] if ' |' in response.output_text else response.output_text
 
         return {
             "decision": decision,
-            "message": response.output_text,
+            "message": message,
         }

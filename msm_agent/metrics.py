@@ -1,4 +1,4 @@
-from __future__ import annotations
+import warnings
 import numpy as np
 from pathlib import Path
 from msmbuilder.decomposition import tICA
@@ -69,7 +69,8 @@ def its_plateau_check(its: dict, lag_list: list, top_k=Metric_param.plateau_top_
     timescales = []
     for key, val in its.items():
         if len(val) < top_k:
-            raise ValueError(f"ITS for lag {key} has only {len(val)} timescales, less than top_k={top_k}")
+            warnings.warn(f"ITS for lag {key} has only {len(val)} timescales, less than top_k={top_k}. Setting top_k to {top_k}.")
+        top_k = len(val)
         timescales.append(np.asarray(val[:top_k], dtype=float)) # [num of lag, top k]
     lagstep = np.array(lag_list, dtype=int) # [num of lag]
     timescales = np.array(timescales)

@@ -47,7 +47,7 @@ def build_stage1_summary(
     lines += [
         f"Saved features: {run_dir / 'features'}",
         "",
-        "Please review featurization results. Address all warning messages before proceeding.",
+        "Please review featurization results. Address any warning message before proceeding.",
     ]
     return "\n".join(lines)
 
@@ -82,7 +82,7 @@ def build_stage2_summary(
         ]
     lines += [
         "",
-        "Please review the ITS curve for tICA parameter scan. Address all warning messages before proceeding",
+        "Please review the ITS curve for tICA parameter scan. Address any warning message before proceeding",
     ]
     return "\n".join(lines)
 
@@ -107,7 +107,7 @@ def build_stage3_summary(
 
     lines += [
         "",
-        "Please review the final tICA embeddings. Address all warning messages before proceeding",
+        "Please review the final tICA embeddings. Address any warning message before proceeding",
     ]
     return "\n".join(lines)
 
@@ -133,7 +133,7 @@ def build_stage4_summary(
         ]
     lines += [
         "",
-        "Please review the clustering results. Address all warning messages before proceeding",
+        "Please review the clustering results. Address any warning message before proceeding",
     ]
     return "\n".join(lines)
 
@@ -164,7 +164,7 @@ def build_stage5_summary(
         ]
     lines += [
         "",
-        "Please review the MSM quality metrics. Address all warning messages before proceeding.",
+        "Please review the MSM quality metrics. Address any warning message before proceeding.",
     ]
     return "\n".join(lines)
 
@@ -186,7 +186,7 @@ def build_stage6_summary(
         ]
     lines += [
         "",
-        "Please review the MSM test results. Address all warning messages before proceeding.",
+        "Please review the MSM test results. Address any warning message before proceeding.",
         "Note that the estimated timescales will be slower after lumping.",
     ]
     return "\n".join(lines)
@@ -210,6 +210,6 @@ def build_stage7_summary(
         ]
     lines += [
             "",
-            "Please review the macrostate analysis results. Address all warning messages before proceeding.",
+            "Please review the macrostate analysis results.",
     ]
     return "\n".join(lines)
