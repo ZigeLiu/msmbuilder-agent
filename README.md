@@ -33,8 +33,16 @@ export OPENAI_API_KEY=your_api_key_here
 export GOOGLE_API_KEY=your_api_key_here
 ```
 If running a local LLM via Ollama, please make sure the Ollama server is running in another terminal. Change the model name in agent_ollama.py to the model you are using.  
-Running the agent.
+
+# Running human in the loop agent 
+Running the agent with OpenAI or the model of your choice.
 ```
 python agent_openai.py
 ```
-Follow link to open user interface in browser.
+
+# Running automatic parameter search agent
+Running the agent with OpenAI.
+```
+python agent_auto.py
+```
+Follow link to open user interface in browser. Update the data path and initial parameter setting in config and run the agent.
