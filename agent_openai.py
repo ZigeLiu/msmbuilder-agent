@@ -473,7 +473,7 @@ def execute_tool(st: SessionState, name: str, args: Dict[str, Any]) -> Dict[str,
             value_yaml=args["value_yaml"],
         )
     elif name == "decide_feature":
-        result = tool_decide_feature(st, yaml_dump(args.get("message", "")))
+        result = tool_decide_feature(st, yaml_dump(args.get("message", "")), yaml_dump(args.get("run_dir", None)))
     elif name in {"run_stage1", "run_stage1_featurization"}:
         result = tool_run_stage(st, 1)
     elif name in {"run_stage2", "run_stage2_tica_scan"}:
