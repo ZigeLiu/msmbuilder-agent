@@ -10,6 +10,7 @@ data:
   topology: "data/ala2_test_data/ala2.pdb"
   saving_interval: 1
   stride: 1
+  load_preprocessed_dir: null
 
 features:
   type: distance

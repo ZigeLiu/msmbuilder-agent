@@ -63,6 +63,7 @@ FEATURE_SET = {
         "use_case": "Good for studying interactions between specific regions (e.g. protein-protein interfaces)",
         "parameters": {
             "atom_selection": [["not element H"], ["not element H"]], ################ have agent update 
+            "pair_selection": None, #### loaded if exist #####
             "type": "distance",
             "selection": "distances" 
         },
@@ -108,15 +109,29 @@ def inspect_data(cfg: dict):
         "entity": [entity[chain.index] for chain in top.chains]
     }
 
-def decide_feature_selection(cfg: dict, user_request: str = "") -> dict:
+def decide_feature_selection(cfg: dict, request: dict, run_dir: str | Path) -> dict:
     inspect = inspect_data(cfg)
-    text = user_request.lower()
+    text = request.lower()
     decision = {
         "feature": None,
         "fallbacks": [],
-        "reason": [],
+        "reason": ["Provide suggestions on feature selection when confident about it."\
+                    "Include keywords when suggesting: angle, torsion, dihedral, rotamer, sidechain, ligand, binding, unbinding, pocket, pose",
+                    ""],
         "warnings": [],
     }
+    # contact test result exist, prioritized
+    dist_cutoff = float(cfg["features"].get("distance_cutoff", 0.8))
+    contact_test_path = run_dir / f"contact_freq_{dist_cutoff}.npz"
+    if os.path.exists(contact_test_path):
+        test_output = np.load(contact_test_path, allow_pickle=True)
+        pairs = test_output['pairs']
+        decision["feature"] = FEATURE_SET["interface"]
+        decision["feature"]["parameters"]["pair_selection"] = pairs
+        decision["reason"].append(
+            "Loading atomic pairs in contact with high frequency from contact test."
+        )
+        return decision
 
     has_ligand = (inspect['entity'].count('ligand') > 0)
     has_nucleic_acid = (inspect['entity'].count('nucleic_acid') > 0)
@@ -179,7 +194,7 @@ def _find_featurizer(frame, feature_selection, atom_selection, dist_cutoff, pair
     atom_slice, atom_slice_1, atom_slice_2 = None, None, None
     if pair_selection is not None:
         try:
-            pairs = np.load(pair_selection)
+            pairs = pair_selection #np.load(pair_selection)
         except Exception as e:
             raise ValueError(f"Error loading pair selection file: {pair_selection}. Error: {e}")
     else:
@@ -227,24 +242,24 @@ def _load_feature(cfg: dict, run_dir: Path):
     feature_type = cfg["features"]["type"]
     feature_selection = cfg["features"]["selection"] # list of angles or single distacne type
     dist_cutoff = float(cfg["features"].get("distance_cutoff", 0.8))
-    prepossed_dir = cfg["data"].get("load_preprocessed_dir", None)
+    preprocessed_dir = cfg["data"].get("load_preprocessed_dir", None)
     pair_selection = cfg["features"].get("pair_selection", None)
     atom_selection = cfg["features"].get("atom_selection", None)
 
     if not data_dir or not top:
-        raise ValueError("Both data_dir and topology are required for kind=xtc,dcd,trr")
+        raise ValueError("Both data_dir and topology are required for kind=xtc, dcd, trr")
 
-    files = list(glob.glob(os.path.join(data_dir, f"*.{kind}")))
     loaded_features = []
-    if prepossed_dir is not None:
+    if preprocessed_dir is not None:
         print("Features already exist, loading from disk...")
+        files = list(glob.glob(os.path.join(preprocessed_dir, "*.npy")))
         for file in files:
-            feature_file = Path(prepossed_dir) / (Path(file).stem + ".npy")
             try:
-                loaded_features.append(np.load(feature_file))
+                loaded_features.append(np.load(file))
             except Exception as e:
-                raise ValueError(f"Error loading feature file {feature_file}: {e}")
+                raise ValueError(f"Error loading feature file {file}: {e}")
     else:
+        files = list(glob.glob(os.path.join(data_dir, f"*.{kind}")))
         frame = md.load(top)
         if feature_type == "angle":
             assert len(feature_selection) > 1, "Must specify at least two angle types"
@@ -284,8 +299,10 @@ def _find_clusterer(random_state, cl_cfg):
 
 def _save_intermediate(data, out_path: Path):
     out_path.mkdir(exist_ok=True)
-    feature_dir = out_path.parent / "features" # refer to feature file names for naming consistency
-    file_name = glob.glob(str(feature_dir / "*.npy"))
-    for i,file in enumerate(file_name):
-        name = Path(file).stem
-        np.save(out_path / f"{name}.npy", data[i])
+    #feature_dir = out_path.parent / "features" # refer to feature file names for naming consistency
+    #file_name = glob.glob(str(feature_dir / "*.npy"))
+    #for i, in enumerate(file_name):
+    #    name = Path(file).stem
+    #    np.save(out_path / f"{name}.npy", data[i])
+    for i in range(len(data)):
+        np.save(out_path / f"{i+1}.npy") ## if using sorted the name should be consistent

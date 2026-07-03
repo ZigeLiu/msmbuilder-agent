@@ -15,4 +15,8 @@ class Metric_param:
     ck_block_percentage: float = 0.1
     ck_n_bootstrap: int = 20
     ck_pass_threshold: float = 1.96
+    conact_freq_threshold: float = 0.1
 
+@dataclass(frozen=False)
+class Auto_set:
+    max_try: int = 100

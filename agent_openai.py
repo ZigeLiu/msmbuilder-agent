@@ -162,7 +162,7 @@ Your role:
 - Provide parameter tuning suggestions when receiving hints.
 
 Important rules:
-- Each stage needs the output from the previous stage to run.
+- If data.load_preprocessed_dir is not null, skip feature decision and stage 1 to directly load the features.
 - Stage 3 requires tica.selected_lag_time to be set.
 - Stage 6 requires microMSM.selected_lag_time to be set.
 - If the user says 'ok', 'continue', or 'next', usually move to the next stage without editing config.
@@ -254,13 +254,15 @@ TOOLS = [
     {
         "type": "function",
         "name": "decide_feature",
-        "description": "Decide feature type and selection based on input topology and user message before stage 1.",
+        "description": "Decide feature type and selection based on input topology and message from user or assistant.",
         "parameters": {
             "type": "object",
             "properties": {
-                "user_message": {"type": "string"},
+                "cfg": {"type": "object"},
+                "message": {"type": "string"},
+                "run_dir": {"type": "path"}
             },
-            "required": [],
+            "required": ["cfg", "message"],
             "additionalProperties": False,
         },  
     },
@@ -270,8 +272,11 @@ TOOLS = [
         "description": "Run Stage 1: load data and featurize.",
         "parameters": {
             "type": "object",
-            "properties": {},
-            "required": [],
+            "properties": {
+                "cfg": {"type": "object"},
+                "run_dir": {"type": "path"}
+            },
+            "required": ["cfg"],
             "additionalProperties": False,
         },
     },
@@ -281,8 +286,11 @@ TOOLS = [
         "description": "Run Stage 2: tICA lag scan using the latest Stage 1 result in current_run_dir.",
         "parameters": {
             "type": "object",
-            "properties": {},
-            "required": [],
+            "properties": {
+                "cfg": {"type": "object"},
+                "run_dir": {"type": "path"}
+            },
+            "required": ["cfg", "run_dir"],
             "additionalProperties": False,
         },
     },
@@ -292,8 +300,11 @@ TOOLS = [
         "description": "Run Stage 3: final tICA fit using current_run_dir and current config.",
         "parameters": {
             "type": "object",
-            "properties": {},
-            "required": [],
+            "properties": {
+                "cfg": {"type": "object"},
+                "run_dir": {"type": "path"}
+            },
+            "required": ["cfg", "run_dir"],
             "additionalProperties": False,
         },
     },
@@ -303,8 +314,11 @@ TOOLS = [
         "description": "Run Stage 4: clustering using current_run_dir and current config.",
         "parameters": {
             "type": "object",
-            "properties": {},
-            "required": [],
+            "properties": {
+                "cfg": {"type": "object"},
+                "run_dir": {"type": "path"}
+            },
+            "required": ["cfg", "run_dir"],
             "additionalProperties": False,
         },
     },
@@ -314,8 +328,11 @@ TOOLS = [
         "description": "Run Stage 5: MSM parameter scan using current_run_dir and current config.",
         "parameters": {
             "type": "object",
-            "properties": {},
-            "required": [],
+            "properties": {
+                "cfg": {"type": "object"},
+                "run_dir": {"type": "path"}
+            },
+            "required": ["cfg", "run_dir"],
             "additionalProperties": False,
         },
     },
@@ -325,8 +342,11 @@ TOOLS = [
         "description": "Run Stage 6: MSM fit using current_run_dir and current config.",
         "parameters": {
             "type": "object",
-            "properties": {},
-            "required": [],
+            "properties": {
+                "cfg": {"type": "object"},
+                "run_dir": {"type": "path"}
+            },
+            "required": ["cfg", "run_dir"],
             "additionalProperties": False,
         },
     },
@@ -336,8 +356,11 @@ TOOLS = [
         "description": "Run Stage 7: lump and evaluate model using current_run_dir and current config.",
         "parameters": {
             "type": "object",
-            "properties": {},
-            "required": [],
+            "properties": {
+                "cfg": {"type": "object"},
+                "run_dir": {"type": "path"}
+            },
+            "required": ["cfg", "run_dir"],
             "additionalProperties": False,
         },
     },
@@ -386,10 +409,10 @@ def tool_update_config_value(st: SessionState, path: str, value_yaml: str) -> Di
         "new_value": value,
     }
 
-def tool_decide_feature(st: SessionState, user_message):
+def tool_decide_feature(st: SessionState, message, run_dir=None):
     cfg = st.current_cfg_obj
     st.current_stage = "decide_feature"
-    decision = decide_feature_selection(cfg, user_message)
+    decision = decide_feature_selection(cfg, message, run_dir)
     feature_dict = decision['feature']
     for name, val in feature_dict['parameters'].items():
         result = tool_update_config_value(st, f"features.{name}", yaml_dump(val))
@@ -450,7 +473,7 @@ def execute_tool(st: SessionState, name: str, args: Dict[str, Any]) -> Dict[str,
             value_yaml=args["value_yaml"],
         )
     elif name == "decide_feature":
-        result = tool_decide_feature(st, yaml_dump(args.get("user_message", "")))
+        result = tool_decide_feature(st, yaml_dump(args.get("message", "")))
     elif name in {"run_stage1", "run_stage1_featurization"}:
         result = tool_run_stage(st, 1)
     elif name in {"run_stage2", "run_stage2_tica_scan"}:
@@ -622,6 +645,7 @@ def run_agent_once(
 
     # 6) Sync config back to YAML editor in case tool updated it
     yaml_text = st.current_cfg_yaml or yaml_text
+    json.dump(st.current_cfg_obj,st.current_run_dir+"config.yaml") ########## save config each time after running
 
     return (
         chat_history,
@@ -640,13 +664,16 @@ def build_app():
         st = gr.State(SessionState())
 
         gr.Markdown("## MSM building agent \nLLM-empowered molecular dynamics simulation analysis tool")
+        gr.Markdown("Start by adding exact path to your local data folder in config editor, " \
+                    "and a brief introduction of what you are interested in about your system." \
+                    "If you have your curated features, edit the path in load preprocessed dir")
 
         with gr.Row():
             with gr.Column(scale=1):
                 chat = gr.Chatbot(label="Chat", height=560)
                 user_in = gr.Textbox(
                     label="Message",
-                    placeholder='Examples: "run featurization", "rerun with current config", "set selected tica lagtime to 3 and run tica scan"',
+                    placeholder='Examples: "run featurization", "set selected tica lagtime to 3 and run tica scan"',
                 )
                 btn_send = gr.Button("Send")
                 latest_image = gr.Gallery(label="Output figure", columns=1, height="500", object_fit="contain")

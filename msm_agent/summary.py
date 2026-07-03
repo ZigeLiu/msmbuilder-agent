@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import numpy as np
+from parameters import Metric_param
 
 def build_stage1_summary(
     cfg: Dict[str, Any],
@@ -39,10 +40,10 @@ def build_stage1_summary(
         lines.append("Warning: Feature dimension is already low, skip stage 2 or use a different set of features.")
     if contact_test:
         lines.append(f"Fraction of pairs in contact: {contact_test.get('in_contact_fraction', 'NA')}")
-        if contact_test.get("in_contact_fraction", 0) < 0.1:
+        if contact_test.get("in_contact_fraction", 0) < Metric_param.conact_freq_threshold:
             lines.append("Warning: Low fraction of frames with contacts, may be due to a small distance cutoff or a large set of distances.")
             lines.append("Warning: First consider increasing the distance cutoff")
-            lines.append(f"Warning: Or set features.pair_selection to '{run_dir} / in_contact_pairs_{contact_test['dist_cutoff']}_{contact_test['contact_freq_cutoff']}.npy'.")
+            lines.append(f"Warning: Or rerun decide feature with refines pair selection based on contact test outcome.")
     
     lines += [
         f"Saved features: {run_dir / 'features'}",
