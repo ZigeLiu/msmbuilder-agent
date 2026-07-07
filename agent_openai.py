@@ -24,7 +24,6 @@ from msm_agent.featurizationv1 import inspect_data
 from msm_agent.config import (
     AgentConfig,
     ConfigState,
-    config_to_mapping,
     dump_config_yaml,
     load_yaml_config_state,
     save_config,

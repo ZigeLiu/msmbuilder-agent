@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import numpy as np
-from parameters import Metric_param
+from msm_agent.parameters import Metric_param
 
 def build_stage1_summary(
     cfg: Dict[str, Any],

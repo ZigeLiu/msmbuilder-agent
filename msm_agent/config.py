@@ -118,7 +118,7 @@ def load_yaml_config_state(text: str, touched_sections: set[str] | None = None) 
 
 def serialize_config_subset(state: ConfigState) -> dict[str, Any]:
     full_data = asdict(state.config)
-    data = {"run_dir": full_data["run_dir"]}
+    data = {"run_dir": str(full_data["run_dir"])}
     for section_name in SECTION_NAMES:
         if section_name in state.touched_sections:
             data[section_name] = full_data[section_name]
@@ -128,8 +128,10 @@ def save_config(state, path):
     if isinstance(state, ConfigState):
         #data = serialize_config_subset(state)
         data = asdict(state.config)
+        data["run_dir"] = str(data["run_dir"])
     elif isinstance(state, AgentConfig):
         data = asdict(state)
+        data["run_dir"] = str(data["run_dir"])
     elif isinstance(state, dict):
         data = state
     else:

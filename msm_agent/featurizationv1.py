@@ -116,7 +116,7 @@ def decide_feature_selection(cfg: dict, request: str, run_dir: str | Path) -> di
     if os.path.exists(contact_test_path):
         #test_output = np.load(contact_test_path, allow_pickle=True)
         #pairs = test_output['pairs']
-        pairs = contact_test_path # track file path 
+        pairs = str(contact_test_path) # track file path 
         decision["feature"] = FEATURE_SET["interface"]
         decision["feature"]["parameters"]["pair_selection"] = pairs
         decision["reason"].append(
