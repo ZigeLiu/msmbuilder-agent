@@ -1,12 +1,13 @@
 from pathlib import Path
 import os
 import glob
-import time
 import itertools
 from functools import partial
 import numpy as np
 import mdtraj as md
 import msmbuilder.cluster as cluster_module
+from msm_agent.parameters import Metric_param
+from msm_agent.config import save_config
 
 NORM_AA = ['ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'GLN', 'GLU', 'GLY', 'HIS', 'ILE', 'LEU', 'LYS', 'MET', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL']
 TERM_AA =['ACE', 'NME']
@@ -70,15 +71,6 @@ FEATURE_SET = {
     }
 }
 
-def _make_run_dir(cfg: dict) -> Path:
-    base = Path(cfg["run"]["output_dir"])
-    base.mkdir(parents=True, exist_ok=True)
-    name = cfg["run"]["run_name"]
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    run_dir = base / f"{name}_{ts}"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    return run_dir
-
 def inspect_data(cfg: dict):
     try:
         top = md.load(cfg["data"]["topology"]).topology
@@ -109,23 +101,22 @@ def inspect_data(cfg: dict):
         "entity": [entity[chain.index] for chain in top.chains]
     }
 
-def decide_feature_selection(cfg: dict, request: dict, run_dir: str | Path) -> dict:
+def decide_feature_selection(cfg: dict, request: str, run_dir: str | Path) -> dict:
     inspect = inspect_data(cfg)
     text = request.lower()
     decision = {
         "feature": None,
         "fallbacks": [],
-        "reason": ["Provide suggestions on feature selection when confident about it."\
-                    "Include keywords when suggesting: angle, torsion, dihedral, rotamer, sidechain, ligand, binding, unbinding, pocket, pose",
-                    ""],
+        "reason": [],
         "warnings": [],
     }
     # contact test result exist, prioritized
-    dist_cutoff = float(cfg["features"].get("distance_cutoff", 0.8))
+    dist_cutoff = Metric_param.distance_cutoff
     contact_test_path = run_dir / f"contact_freq_{dist_cutoff}.npz"
     if os.path.exists(contact_test_path):
-        test_output = np.load(contact_test_path, allow_pickle=True)
-        pairs = test_output['pairs']
+        #test_output = np.load(contact_test_path, allow_pickle=True)
+        #pairs = test_output['pairs']
+        pairs = contact_test_path # track file path 
         decision["feature"] = FEATURE_SET["interface"]
         decision["feature"]["parameters"]["pair_selection"] = pairs
         decision["reason"].append(
@@ -194,7 +185,8 @@ def _find_featurizer(frame, feature_selection, atom_selection, dist_cutoff, pair
     atom_slice, atom_slice_1, atom_slice_2 = None, None, None
     if pair_selection is not None:
         try:
-            pairs = pair_selection #np.load(pair_selection)
+            file = np.load(Path(pair_selection), allow_pickle=True)
+            pairs = file['pairs'] #np.load(pair_selection)
         except Exception as e:
             raise ValueError(f"Error loading pair selection file: {pair_selection}. Error: {e}")
     else:
@@ -232,25 +224,21 @@ def _transform_data(featurizer, traj):
     else:
         return featurizer(traj)
     
-def _load_feature(cfg: dict, run_dir: Path):
-    kind = cfg["data"]["kind"]
-    assert kind in ["xtc", "dcd", "trr"], f"Unsupported data.kind: {kind}. Supported: xtc, dcd, trr"
-
-    data_dir = cfg["data"]["dir"]
-    top = cfg["data"]["topology"]
+def load_feature(cfg: dict, message: str, run_dir: Path):
+    kind = cfg["data"].get("kind", None)
+    if kind is not None:
+        assert kind in ["xtc", "dcd", "trr"], f"Unsupported data.kind: {kind}. Supported: xtc, dcd, trr"
+    data_dir = cfg["data"].get("dir", None)
+    top = cfg["data"].get("topology", None)
     stride = int(cfg["data"].get("stride", 1))
-    feature_type = cfg["features"]["type"]
-    feature_selection = cfg["features"]["selection"] # list of angles or single distacne type
-    dist_cutoff = float(cfg["features"].get("distance_cutoff", 0.8))
     preprocessed_dir = cfg["data"].get("load_preprocessed_dir", None)
-    pair_selection = cfg["features"].get("pair_selection", None)
-    atom_selection = cfg["features"].get("atom_selection", None)
-
-    if not data_dir or not top:
-        raise ValueError("Both data_dir and topology are required for kind=xtc, dcd, trr")
 
     loaded_features = []
     if preprocessed_dir is not None:
+        cfg['features']['type'] = "preprocessed"
+        cfg['features']['selection'] = "preprocessed"
+        cfg['features']['atom_selection'] = "preprocessed"
+        cfg['features']['pair_selection'] = "preprocessed"
         print("Features already exist, loading from disk...")
         files = list(glob.glob(os.path.join(preprocessed_dir, "*.npy")))
         for file in files:
@@ -259,7 +247,17 @@ def _load_feature(cfg: dict, run_dir: Path):
             except Exception as e:
                 raise ValueError(f"Error loading feature file {file}: {e}")
     else:
-        files = list(glob.glob(os.path.join(data_dir, f"*.{kind}")))
+        if not data_dir or not top:
+            raise ValueError("Both data_dir and topology are required for processing data of kind xtc, dcd, trr")
+        # decide feature selection 
+        decision = decide_feature_selection(cfg, message, run_dir)
+        cfg['features'] = decision['feature']['parameters']  # update cfg with the selected feature parameters
+        feature_type = cfg["features"]["type"]
+        feature_selection = cfg["features"]["selection"] # list of angles or single distacne type
+        pair_selection = cfg["features"].get("pair_selection", None)
+        atom_selection = cfg["features"].get("atom_selection", None)
+
+        files = sorted(glob.glob(os.path.join(data_dir, f"*.{kind}")))
         frame = md.load(top)
         if feature_type == "angle":
             assert len(feature_selection) > 1, "Must specify at least two angle types"
@@ -269,25 +267,26 @@ def _load_feature(cfg: dict, run_dir: Path):
             assert feature_selection in ["distances", "displacements", "neighbors"], f"Unsupported distance type: {feature_selection}. Supported: distances, displacements, neighbors"
         else:
             raise ValueError(f"Unsupported feature type: {feature_type}. Supported: angle, distance")
-        featurizer, pairs = _find_featurizer(frame, feature_selection, atom_selection, dist_cutoff, pair_selection)
+        featurizer, pairs = _find_featurizer(frame, feature_selection, atom_selection, Metric_param.distance_cutoff, pair_selection)
         assert featurizer is not None, f"Could not find featurizer for selection: {feature_selection}, {atom_selection}"
 
-        (run_dir / "features").mkdir(exist_ok=True)
+        #(run_dir / "features").mkdir(exist_ok=True)
         contact = {}
-        for file in files:
+        for i, file in enumerate(files):
             traj = md.load(file, top=top, stride=stride)
             processed_feature = _transform_data(featurizer,traj)
-            out_file = str(run_dir / "features" / (Path(file).stem + ".npy"))
-            np.save(out_file, processed_feature)
+            #out_file = str(run_dir / "features" / f"_{i+1}.npy")
+            #np.save(out_file, processed_feature)
             if feature_type == "distance":
-                contact_freq = (processed_feature < dist_cutoff).mean(axis=0) # [n_pairs]
+                contact_freq = (processed_feature < Metric_param.distance_cutoff).mean(axis=0) # [n_pairs]
                 contact[len(processed_feature)] = contact_freq # dict of traj length to contact frequency for each pair
             loaded_features.append(processed_feature)
         if contact:
             total_contact_freq = np.mean([int(key) * np.array(val,dtype=float) for key, val in contact.items()]) if contact else None
-            np.savez(run_dir / f"contact_freq_{dist_cutoff}.npz", contact_freq=total_contact_freq, pairs=pairs)
+            np.savez(run_dir / f"contact_freq_{Metric_param.distance_cutoff}.npz", contact_freq=total_contact_freq, pairs=pairs)
         ################################## retrieve later for feature selection ######################################
     dt_ps = float(cfg["data"]["saving_interval"]) * stride
+    save_config(cfg, run_dir / "config.yaml")
     return loaded_features, dt_ps
 
 def _find_clusterer(random_state, cl_cfg):
@@ -305,4 +304,4 @@ def _save_intermediate(data, out_path: Path):
     #    name = Path(file).stem
     #    np.save(out_path / f"{name}.npy", data[i])
     for i in range(len(data)):
-        np.save(out_path / f"{i+1}.npy") ## if using sorted the name should be consistent
+        np.save(out_path / f"{i+1}.npy", data[i]) ## if using sorted the name should be consistent

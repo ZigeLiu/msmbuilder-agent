@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import copy
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict, fields
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime
 
 import gradio as gr
 import yaml
@@ -19,103 +20,45 @@ from msm_agent.stage import (
     run_stage6_msm_fit,
     run_stage7_lumpeval 
 )
-from msm_agent.featurizationv1 import decide_feature_selection
+from msm_agent.featurizationv1 import inspect_data
+from msm_agent.config import (
+    AgentConfig,
+    ConfigState,
+    config_to_mapping,
+    dump_config_yaml,
+    load_yaml_config_state,
+    save_config,
+    field_names,
+)
+from msm_agent.parameters import Plot_param
 
 
 # ----------------------------
-# YAML / config helpers
+# Config helpers
 # ----------------------------
-def safe_yaml_load(s: str) -> Dict[str, Any]:
-    obj = yaml.safe_load(s)
-    if not isinstance(obj, dict):
-        raise ValueError("Config must be a YAML mapping (dict).")
-    return obj
-
-
-def yaml_dump(obj: Any) -> str:
-    return yaml.safe_dump(obj, sort_keys=False, allow_unicode=True)
-
-
-def set_nested_key(cfg: Dict[str, Any], path: str, value: Any) -> None:
+def set_nested_key(cfg: Any, path: str, value: Any) -> None:
     parts = path.split(".")
     cur = cfg
     for p in parts[:-1]:
-        if p not in cur or not isinstance(cur[p], dict):
-            cur[p] = {}
-        cur = cur[p]
-    cur[parts[-1]] = value
+        if isinstance(cur, dict):
+            if p not in cur or not isinstance(cur[p], dict):
+                cur[p] = {}
+            cur = cur[p]
+        else:
+            cur = getattr(cur, p)
+    if isinstance(cur, dict):
+        cur[parts[-1]] = value
+    else:
+        setattr(cur, parts[-1], value)
 
+def init_config_state() -> ConfigState:
+    init_config = AgentConfig()
+    return ConfigState(config=init_config, touched_sections=set(["data"]))
 
-def get_nested_key(cfg: Dict[str, Any], path: str) -> Any:
-    parts = path.split(".")
-    cur = cfg
-    for p in parts:
-        if not isinstance(cur, dict) or p not in cur:
-            raise KeyError(path)
-        cur = cur[p]
-    return cur
-
-
-def init_default_config() -> str:
-    example_path = Path("examples/interactive_pipeline.yaml")
-    if example_path.exists():
-        return example_path.read_text()
-
-    fallback = {
-        "run": {
-            "output_dir": "runs",
-            "run_name": "ala2_test",
-            "seed": 42,
-            "run_dir": None,  
-        },
-        "data": {
-            "kind": "xtc",
-            "dir": "/path/to/xtc_dir",
-            "topology": "/path/to/topology.pdb",
-            "stride": 1,
-            "saving_interval": 1.0,
-            "load_preprocessed_dir": None,
-        },
-        "features": {
-            "type": "angle",
-            "selection": ["phi", "psi"],
-            "atom_selection": "BACKBONE",
-        },
-        "tica": {
-            "lag_time_frames_range": [1, 10],
-            "lag_time_frames_grid_size": 20,
-            "n_components": 2,
-            "selected_lag_time": None,
-            "selected_n_components": None,
-        },
-        "microMSM": {
-            "lag_time_frames_range": [1, 10],
-            "lag_time_frames_grid_size": 20,
-            "n_timescales": 5,
-            "reversible_type": "transpose",
-            "ergodic_cutoff": 1.0,
-        },
-        "macroMSM": {
-            "n_macrostates": 4,
-            "lump_method": "PCCAPlus"
-        },
-        "clustering": {
-            "method": "KMeans",
-            "n_clusters": 50,
-        },
-        "plots": {
-            "gridsize": 40,
-            "bins": 50,
-        },
-        "evaluation": {
-            "plateau_k": None,
-            "min_occupancy": 10,
-            "ck_plot_only": False,
-            "ck_test_steps": 4,
-            "ck_test_states": 6,
-        },
-    }
-    return yaml_dump(fallback)
+def mark_path_worked(st: ConfigState, path: str) -> None:
+    section_name = path.split(".", 1)[0]
+    if section_name in {"data", "features", "tica", "clustering", "microMSM", "macroMSM"}:
+        st.touched_sections.add(section_name)
 
 
 # ----------------------------
@@ -123,14 +66,14 @@ def init_default_config() -> str:
 # ----------------------------
 @dataclass
 class SessionState:
-    current_cfg_yaml: str = ""
-    current_cfg_obj: Optional[Dict[str, Any]] = None
+    current_cfg_yaml: str = "" # for editor display
+    current_cfg_state: Optional[ConfigState] = None # config with flag
 
-    current_run_dir: Optional[str] = None
+    current_run_dir: Optional[Path] = None
     current_stage: str = "init"
 
     latest_summary: str = ""
-    latest_plot_path: Optional[str] = None
+    latest_plot_path: Optional[List[str]] = None
     error_msg: Optional[Dict[str, Any]] = None
 
     # optional: keep tool events for debugging
@@ -148,6 +91,7 @@ SYSTEM_PROMPT = """You are an MSM building agent for a multi-stage molecular dyn
 Your role:
 - Help the user sequentially run through the stages.
 - Each stage has its specific tasks:
+  0) Inspect data
   1) Stage 1: featurization
   2) Stage 2: tICA parameter scan
   3) Stage 3: fit tICA with selected parameters
@@ -162,7 +106,8 @@ Your role:
 - Provide parameter tuning suggestions when receiving hints.
 
 Important rules:
-- If data.load_preprocessed_dir is not null, skip feature decision and stage 1 to directly load the features.
+- Provide feature selection suggestions based on the user's request and the system's topology.\
+Include keywords when suggesting: angle, torsion, dihedral, rotamer, sidechain, ligand, binding, unbinding, pocket, pose.
 - Stage 3 requires tica.selected_lag_time to be set.
 - Stage 6 requires microMSM.selected_lag_time to be set.
 - If the user says 'ok', 'continue', or 'next', usually move to the next stage without editing config.
@@ -170,49 +115,6 @@ Important rules:
 - If the user asks to change parameters, confirm which parameters to change with the user, then update the config and rerun the current stage.
 - Keep responses concise, practical, and stage-aware.
 """
-
-# Only these config paths are editable via update_config_value.
-ALLOWED_CONFIG_UPDATE_PATHS = [
-    "run.output_dir",
-    "run.run_name",
-    "run.seed",
-    "run.run_dir",
-    "data.kind",
-    "data.dir",
-    "data.topology",
-    "data.stride",
-    "data.saving_interval",
-    "data.load_preprocessed_dir",
-    "features.type",
-    "features.selection",
-    "features.atom_selection",
-    "features.pair_selection",
-    "tica.lag_time_frames_range",
-    "tica.lag_time_frames_grid_size",
-    "tica.n_components",
-    "tica.selected_lag_time",
-    "tica.selected_n_components",
-    "microMSM.lag_time_frames_range",
-    "microMSM.lag_time_frames_grid_size",
-    "microMSM.n_timescales",
-    "microMSM.reversible_type",
-    "microMSM.ergodic_cutoff",
-    "microMSM.selected_lag_time",
-    "macroMSM.n_macrostates",
-    "macroMSM.lump_method",
-    "clustering.method",
-    "clustering.n_clusters",
-    "clustering.tiny_threshold"
-    "plots.gridsize",
-    "plots.bins",
-    "evaluation.plateau_k",
-    "evaluation.plateau_threshold",
-    "evaluation.plateau_last_step",
-    "evaluation.min_occupancy",
-    "evaluation.ck_plot_only",
-    "evaluation.ck_test_steps",
-    "evaluation.ck_test_states",
-]
 
 TOOLS = [
     {
@@ -253,30 +155,30 @@ TOOLS = [
     },
     {
         "type": "function",
-        "name": "decide_feature",
-        "description": "Decide feature type and selection based on input topology and message from user or assistant.",
+        "name": "inspect_topology",
+        "description": "Inspect the topology of the system. Pass user message for later use.",
         "parameters": {
             "type": "object",
             "properties": {
                 "cfg": {"type": "object"},
-                "message": {"type": "string"},
-                "run_dir": {"type": "path"}
+                "user_message": {"type": "string"},
             },
-            "required": ["cfg", "message"],
+            "required": ["cfg"],
             "additionalProperties": False,
         },  
     },
     {
         "type": "function",
         "name": "run_stage1_featurization",
-        "description": "Run Stage 1: load data and featurize.",
+        "description": "Run Stage 1: load data and featurize based on message.",
         "parameters": {
             "type": "object",
             "properties": {
                 "cfg": {"type": "object"},
+                "message": {"type": "string"},  
                 "run_dir": {"type": "path"}
             },
-            "required": ["cfg"],
+            "required": ["cfg", "message"],
             "additionalProperties": False,
         },
     },
@@ -380,53 +282,51 @@ def tool_get_current_status(st: SessionState) -> Dict[str, Any]:
 
 
 def tool_get_current_config(st: SessionState) -> Dict[str, Any]:
-    return copy.deepcopy(st.current_cfg_obj or {})
+    if st.current_cfg_state is None:
+        return {}
+    return copy.deepcopy(st.current_cfg_state.config)
 
 
 def tool_update_config_value(st: SessionState, path: str, value_yaml: str) -> Dict[str, Any]:
     value = yaml.safe_load(value_yaml)
     st.current_stage = "config_update"
-    if st.current_cfg_obj is None:
+    if st.current_cfg_state is None:
         return {
         "success": False,
         "updated_path": path,
         "new_value": value,
         "error": "No current config loaded. Please load a config before updating values.",
     }
-    if path not in ALLOWED_CONFIG_UPDATE_PATHS:
+    allowded_path = field_names(st.current_cfg_state.config)
+    if path not in allowded_path:
         return {
         "success": False,
         "updated_path": path,
         "new_value": value,
         "error": f"Unsupported config path. Allowed paths: \
-        {', '.join(ALLOWED_CONFIG_UPDATE_PATHS)}",
+        {', '.join(allowded_path)}",
     }
-    set_nested_key(st.current_cfg_obj, path, value)
-    st.current_cfg_yaml = yaml_dump(st.current_cfg_obj)
+    set_nested_key(st.current_cfg_state.config, path, value)
+    st.current_cfg_yaml = dump_config_yaml(st.current_cfg_state)
     return {
         "success": True,
         "updated_path": path,
         "new_value": value,
     }
 
-def tool_decide_feature(st: SessionState, message, run_dir=None):
-    cfg = st.current_cfg_obj
-    st.current_stage = "decide_feature"
-    decision = decide_feature_selection(cfg, message, run_dir)
-    feature_dict = decision['feature']
-    for name, val in feature_dict['parameters'].items():
-        result = tool_update_config_value(st, f"features.{name}", yaml_dump(val))
-        if not result["success"]:
-            return result
+def tool_inspect_topology(st: SessionState, user_message: str) -> Dict[str, Any]:
+    cfg_state = st.current_cfg_state
+    st.current_stage = "inspect_topology"
+    output = inspect_data(asdict(cfg_state.config))
     return {
         "success": True,
-        "decision": decision['feature'],
-        "reasoning": decision['reason'],
+        "inspection": output,
+        "user_message": user_message,
     }
 
 
-def tool_run_stage(st: SessionState, stage: int) -> Dict[str, Any]:
-    if st.current_cfg_obj is None:
+def tool_run_stage(st: SessionState, stage: int, args: Dict[str, Any]) -> Dict[str, Any]:
+    if st.current_cfg_state is None:
         raise ValueError("No current config loaded.")
 
     stage_map = {
@@ -442,21 +342,31 @@ def tool_run_stage(st: SessionState, stage: int) -> Dict[str, Any]:
         raise ValueError(f"Unsupported stage: {stage}")
 
     fn, stage_done_flag = stage_map[stage]
-
     if stage == 1:
-        result = fn(st.current_cfg_obj, st.current_run_dir)
-        if st.current_run_dir is None:
-            st.current_run_dir = result.get("run_dir")
-            set_nested_key(st.current_cfg_obj, "run.run_dir", st.current_run_dir)
-            st.current_cfg_yaml = yaml_dump(st.current_cfg_obj)
-    elif not st.current_run_dir:
-        raise ValueError("No current_run_dir found. Please run Stage 1 first.")
+        result = fn(st.current_cfg_state.config, args.get("message"), st.current_run_dir)
     else:
-        result = fn(st.current_cfg_obj, st.current_run_dir)
+        result = fn(st.current_cfg_state.config, st.current_run_dir)
+
+    stage_sections = {
+        1: ["features"],
+        2: ["tica"],
+        3: ["tica"],
+        4: ["clustering"],
+        5: ["microMSM"],
+        6: ["microMSM"],
+        7: ["macroMSM"],
+    }
+    if result.get("success"):
+        for section_name in stage_sections.get(stage, []):
+            st.current_cfg_state.touched_sections.add(section_name)
 
     st.current_stage = stage_done_flag
     st.latest_summary = result.get("summary", "")
-    st.latest_plot_path = result.get("plot_path")
+    plot_path = result.get("plot_path")
+    if isinstance(plot_path, str):
+        st.latest_plot_path = [plot_path]
+    else:
+        st.latest_plot_path = plot_path
     st.error_msg = result.get("errors","")
     return result
 
@@ -472,22 +382,22 @@ def execute_tool(st: SessionState, name: str, args: Dict[str, Any]) -> Dict[str,
             path=args["path"],
             value_yaml=args["value_yaml"],
         )
-    elif name == "decide_feature":
-        result = tool_decide_feature(st, yaml_dump(args.get("message", "")), yaml_dump(args.get("run_dir", None)))
+    elif name == "inspect_topology":
+        result = tool_inspect_topology(st, str(args.get("user_message", "")))
     elif name in {"run_stage1", "run_stage1_featurization"}:
-        result = tool_run_stage(st, 1)
+        result = tool_run_stage(st, 1, args)
     elif name in {"run_stage2", "run_stage2_tica_scan"}:
-        result = tool_run_stage(st, 2)
+        result = tool_run_stage(st, 2, args)
     elif name in {"run_stage3", "run_stage3_tica_fit"}:
-        result = tool_run_stage(st, 3)
+        result = tool_run_stage(st, 3, args)
     elif name in {"run_stage4", "run_stage4_cluster"}:
-        result = tool_run_stage(st, 4)
+        result = tool_run_stage(st, 4, args)
     elif name in {"run_stage5", "run_stage5_msm_scan"}:
-        result = tool_run_stage(st, 5)
+        result = tool_run_stage(st, 5, args)
     elif name in {"run_stage6", "run_stage6_msm_fit"}:
-        result = tool_run_stage(st, 6)
+        result = tool_run_stage(st, 6, args)
     elif name in {"run_stage7", "run_stage7_lumpeval"}:
-        result = tool_run_stage(st, 7)
+        result = tool_run_stage(st, 7, args)
     else:
         raise ValueError(f"Unknown tool: {name}")
 
@@ -547,27 +457,27 @@ def run_agent_once(
     chat_history: List[Dict[str, str]],
     yaml_text: str,
     st: SessionState,
-) -> Tuple[List[Dict[str, str]], SessionState, str, str, str, Optional[str]]:
+) -> Tuple[List[Dict[str, str]], SessionState, str, str, Optional[List[Tuple[str, str]]]]:
     # 1) Sync YAML editor -> session config
     try:
-        cfg_obj = safe_yaml_load(yaml_text)
+        touched_sections = set(st.current_cfg_state.touched_sections) if st.current_cfg_state is not None else None
+        cfg_state = load_yaml_config_state(yaml_text, touched_sections=touched_sections)
     except Exception as e:
         chat_history = chat_history or []
         chat_history.append({"role": "assistant", "content": f"Config YAML parse error: {e}"})
         return (
             chat_history,
             st,
-            yaml_text,
+            st.current_cfg_yaml,
             st.latest_summary,
-            st.current_run_dir or "",
             st.latest_plot_path,
         )
 
-    st.current_cfg_obj = cfg_obj
-    st.current_cfg_yaml = yaml_text
-    st.current_run_dir = cfg_obj.get("run", {}).get("run_dir", st.current_run_dir) # read from config or none
-    st.current_run_dir = Path(st.current_run_dir) if st.current_run_dir else None 
-
+    st.current_cfg_state = cfg_state
+    st.current_run_dir = Path(cfg_state.config.run_dir) if cfg_state.config.run_dir else None
+    st.current_cfg_yaml = dump_config_yaml(cfg_state)
+    if st.current_run_dir is not None:
+        save_config(cfg_state, st.current_run_dir / "config.yaml")
     # 2) Append user message to UI chat history
     chat_history = chat_history or []
     chat_history.append({"role": "user", "content": user_message})
@@ -643,15 +553,15 @@ def run_agent_once(
 
     chat_history.append({"role": "assistant", "content": assistant_text})
 
-    # 6) Sync config back to YAML editor in case tool updated it
-    yaml_text = st.current_cfg_yaml or yaml_text
-    json.dump(st.current_cfg_obj,st.current_run_dir+"config.yaml") ########## save config each time after running
+    st.current_cfg_state = load_yaml_config_state(st.current_run_dir / "config.yaml", touched_sections=set(st.current_cfg_state.touched_sections))
+    st.current_cfg_yaml = dump_config_yaml(st.current_cfg_state)
+    tool_log = [log['tool'] for log in st.tool_log] if st.tool_log else []
 
     return (
         chat_history,
         st,
-        yaml_text,
-        st.latest_summary,
+        st.current_cfg_yaml,
+        tool_log,
         [(p,p) for p in st.latest_plot_path] if st.latest_plot_path else None,
     )
 
@@ -660,8 +570,21 @@ def run_agent_once(
 # UI
 # ----------------------------
 def build_app():
+    initial_cfg_state = init_config_state()
+    initial_session = SessionState(
+        current_cfg_state=initial_cfg_state,
+        current_cfg_yaml=dump_config_yaml(initial_cfg_state),
+        current_run_dir=Path(initial_cfg_state.config.run_dir),
+    )
+   
+    plotstyle = Plot_param()
+    plotstyle.apply()
+
+    if initial_session.current_run_dir is not None:
+        save_config(initial_cfg_state, initial_session.current_run_dir / "config.yaml")
+
     with gr.Blocks(title="MSMbuilder Agent") as demo:
-        st = gr.State(SessionState())
+        st = gr.State(initial_session)
 
         gr.Markdown("## MSM building agent \nLLM-empowered molecular dynamics simulation analysis tool")
         gr.Markdown("Start by adding exact path to your local data folder in config editor, " \
@@ -682,21 +605,21 @@ def build_app():
                 cfg_editor = gr.Code(
                     label="Current config (YAML)",
                     language="yaml",
-                    value=init_default_config(),
+                    value=initial_session.current_cfg_yaml,
                 )
-                latest_summary = gr.Textbox(label="Latest summary", lines=12)
+                tool_log = gr.Textbox(label="Tool Usage", lines=12)
 
         btn_send.click(
             fn=run_agent_once,
             inputs=[user_in, chat, cfg_editor, st],
-            outputs=[chat, st, cfg_editor, latest_summary, latest_image],
+            outputs=[chat, st, cfg_editor, tool_log, latest_image],
             api_visibility="private",
         )
 
         user_in.submit(
             fn=run_agent_once,
             inputs=[user_in, chat, cfg_editor, st],
-            outputs=[chat, st, cfg_editor, latest_summary, latest_image],
+            outputs=[chat, st, cfg_editor, tool_log, latest_image],
             api_visibility="private",
         )
 

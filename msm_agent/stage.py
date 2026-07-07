@@ -9,6 +9,7 @@ import json
 import time
 import pickle
 
+from dataclasses import asdict
 import numpy as np
 from msmbuilder.decomposition import tICA
 from msmbuilder.msm import MarkovStateModel
@@ -16,10 +17,9 @@ import msmbuilder.lumping as lump_module
 
 # ===== Adjust these imports to your real project layout =====
 from msm_agent.featurizationv1 import (
-    _make_run_dir,
-    _load_feature,
     _save_intermediate,
     _find_clusterer,
+    load_feature,
 )
 
 from msm_agent.summary import (
@@ -46,7 +46,8 @@ from msm_agent.plots import (
     plot_tica_density_hexbin,
     plot_free_energy,
 )
-
+from msm_agent.parameters import Metric_param
+from msm_agent.config import AgentConfig
 
 # ----------------------------
 # JSON / IO helpers
@@ -62,6 +63,9 @@ def _json_default(x):
 
 
 def write_json(obj: Any, path: Path) -> None:
+    if path.exists():
+        existing_data = json.loads(path.read_text())
+        obj = existing_data | obj
     path.write_text(json.dumps(obj, indent=2, default=_json_default))
 
 
@@ -92,18 +96,20 @@ def load_processed_from_run_dir(run_dir: str | Path, data_type: str) -> List[np.
 # ----------------------------
 # Stage 1
 # ----------------------------
-def run_stage1_featurization(cfg: Dict[str, Any], run_dir: Path = None) -> Dict[str, Any]:
-    if run_dir is None or not run_dir.exists():
-        run_dir = _make_run_dir(cfg)
+def run_stage1_featurization(cfg: AgentConfig, message: str, run_dir: Path = None) -> Dict[str, Any]:
+    if not run_dir.exists():
+        run_dir.mkdir(parents=True, exist_ok=True)
+    cfg = asdict(cfg)  
 
     try:
         # priority: processed, pair selection, atom selection
-        features, dt_ps_effective = _load_feature(cfg, run_dir)
+        features, dt_ps_effective = load_feature(cfg, message, run_dir)
         traj_lens = [len(x) for x in features]
         feature_dims = [
             int(x.shape[1]) if getattr(x, "ndim", None) == 2 else None
             for x in features
         ]
+        _save_intermediate(features, run_dir / "features")
     except (ValueError, AssertionError) as e:
         traceback.print_exc()
         return {
@@ -128,23 +134,22 @@ def run_stage1_featurization(cfg: Dict[str, Any], run_dir: Path = None) -> Dict[
                 "hint": "Error using tool. The agent should modify tool choice."
             }],
         }
-    dist_cutoff = float(cfg["features"].get("distance_cutoff", 0.8))
-    freq_cutoff = float(cfg["evaluation"].get("contact_freq_cutoff", 0.1))
+    dist_cutoff = Metric_param.distance_cutoff 
+    freq_cutoff = Metric_param.conact_freq_threshold 
     contact_test = in_contact_test(run_dir, dist_cutoff, freq_cutoff) # return dict or empty
 
     manifest = {
-        "stage": "stage1_featurization",
-        "run_dir": str(run_dir),
-        "dt_ps_effective": float(dt_ps_effective),
-        "dt_ns_effective": float(dt_ps_effective / 1000.0),
-        "n_trajs": len(features),
-        "traj_lens": traj_lens,
-        "feature_dims": np.unique(feature_dims).tolist(),
-        "feature_dir": str(run_dir / "features"),
-        "in_contact_fraction": contact_test.get("in_contact_fraction", "Do not apply"),
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "stage1": {
+            "dt_ns_effective": float(dt_ps_effective / 1000.0),
+            "n_trajs": len(features),
+            "traj_lens": np.unique(traj_lens).tolist(),
+            "feature_dims": np.unique(feature_dims).tolist(),
+            "feature_dir": str(run_dir / "features"),
+            "in_contact_fraction": contact_test.get("in_contact_fraction", "Do not apply"),
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
     }
-    write_json(manifest, run_dir / "stage1_manifest.json")
+    write_json(manifest, run_dir / "manifest.json")
 
     summary = build_stage1_summary(
         cfg=cfg,
@@ -162,28 +167,27 @@ def run_stage1_featurization(cfg: Dict[str, Any], run_dir: Path = None) -> Dict[
         "run_dir": str(run_dir),
         "summary": summary,
         "plot_path": None,
-        "manifest_path": str(run_dir / "stage1_manifest.json"),
     }
 
 
 # ----------------------------
 # Stage 2
 # ----------------------------
-def run_stage2_tica_scan(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, Any]:
+def run_stage2_tica_scan(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]:
     run_dir = Path(run_dir)
     ensure_dir(run_dir / "figs")
+    cfg = asdict(cfg)
     
     try:
-        stage1_manifest = read_json(run_dir / "stage1_manifest.json")
+        manifest = read_json(run_dir / "manifest.json")
         features = load_processed_from_run_dir(run_dir, "features")
 
-        dt_ps_effective = float(stage1_manifest["dt_ps_effective"])
-        dt_ns = dt_ps_effective / 1000.0
+        dt_ns = float(manifest["stage1"]["dt_ns_effective"])
 
         tica_cfg = cfg["tica"]
         lag_min = int(tica_cfg["lag_time_frames_range"][0])
         lag_max = int(tica_cfg["lag_time_frames_range"][1])
-        grid_size = int(tica_cfg.get("lag_time_frames_grid_size", 20))
+        grid_size = int(tica_cfg["lag_time_frames_grid_size"])
         n_components = int(tica_cfg["n_components"])
 
         lag_list = np.linspace(lag_min, lag_max, num=grid_size, dtype=int)
@@ -225,19 +229,18 @@ def run_stage2_tica_scan(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, 
                 "hint": "Error using tool. The agent should modify tool choice."
             }],
         }
-    tica_param = {k: tica_cfg[k] for k in tica_cfg}
-    manifest = {
-        "stage": "stage2_tica_param_scan",
-        "run_dir": str(run_dir),
-        "dt_ns": float(dt_ns),
-        "plot_path": str(plot_path),
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        **tica_param
-    }
-    write_json(manifest, run_dir / "stage2_manifest.json")
-    
     plateau_check = its_plateau_check(tica_its, lag_list.tolist())
-
+    manifest = {
+        "stage2": {
+            "dt_ns": float(dt_ns),
+            "plot_path": str(plot_path),
+            "tica_its": tica_its,
+            "plateau_check": plateau_check,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+    }
+    write_json(manifest, run_dir / "manifest.json")
+    
     summary = build_stage2_summary(
         cfg=cfg,
         run_dir=run_dir,
@@ -253,32 +256,29 @@ def run_stage2_tica_scan(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, 
         "run_dir": str(run_dir),
         "summary": summary,
         "plot_path": [str(plot_path)],
-        "manifest_path": str(run_dir / "stage2_manifest.json"),
     }
 
 
 # ----------------------------
 # Stage 3
 # ----------------------------
-def run_stage3_tica_fit(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, Any]:
+def run_stage3_tica_fit(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]:
     run_dir = Path(run_dir)
     ensure_dir(run_dir / "figs")
+    cfg = asdict(cfg)
     
     try:
         features = load_processed_from_run_dir(run_dir, "features")
 
         tica_cfg = cfg["tica"]
-        selected_lag_time = tica_cfg.get("selected_lag_time", None)
-        selected_n_components = tica_cfg.get("selected_n_components", tica_cfg["n_components"])
-
-        if selected_lag_time is None:
+        if tica_cfg["selected_lag_time"] is None:
             raise ValueError(
                 "cfg['tica']['selected_lag_time'] in frames is required for Stage 3. "
                 "Please set it first, for example after reviewing Stage 2."
             )
 
-        selected_lag_time = int(selected_lag_time)
-        selected_n_components = int(selected_n_components)
+        selected_lag_time = int(tica_cfg["selected_lag_time"])
+        selected_n_components = int(tica_cfg.get("selected_n_components", tica_cfg["n_components"]))
 
         tica_model = tICA(
             lag_time=selected_lag_time,
@@ -296,7 +296,6 @@ def run_stage3_tica_fit(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, A
                 txx[:, 0],
                 txx[:, 1],
                 outpath=density_plot_path,
-                gridsize=int(cfg["plots"]["gridsize"]),
             )
     except (ValueError, AssertionError) as e:
         traceback.print_exc()
@@ -322,17 +321,18 @@ def run_stage3_tica_fit(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, A
                 "hint": "Error using tool. The agent should modify tool choice."
             }],
         }
-    tica_param = {k: tica_cfg[k] for k in tica_cfg}
+   
     manifest = {
-        "stage": "stage3_tica_fit",
-        "run_dir": str(run_dir),
-        "tica_shapes": tica_shapes,
-        "tica_traj_dir": str(run_dir / "tica_trajs"),
-        "plot_path": str(density_plot_path) if density_plot_path else None,
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        **tica_param
+        "stage3": {
+            "tica_lag_time": selected_lag_time,
+            "tica_n_components": selected_n_components,
+            "tica_shapes": tica_shapes,
+            "tica_traj_dir": str(run_dir / "tica_trajs"),
+            "plot_path": str(density_plot_path) if density_plot_path else None,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
     }
-    write_json(manifest, run_dir / "stage3_manifest.json")
+    write_json(manifest, run_dir / "manifest.json")
 
     summary = build_stage3_summary(
         run_dir=run_dir,
@@ -348,27 +348,26 @@ def run_stage3_tica_fit(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, A
         "run_dir": str(run_dir),
         "summary": summary,
         "plot_path": [str(density_plot_path)] if density_plot_path else None,
-        "manifest_path": str(run_dir / "stage3_manifest.json"),
     }
 
 
 # ----------------------------
 # Stage 4
 # ----------------------------
-def run_stage4_cluster(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, Any]:
+def run_stage4_cluster(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]:
     run_dir = Path(run_dir)
     ensure_dir(run_dir / "figs")
+    cfg = asdict(cfg)
 
     try:
         tics = load_processed_from_run_dir(run_dir, "tica_trajs")
         cl_cfg = cfg["clustering"]
-        clusterer = _find_clusterer(random_state=int(cfg["run"]["seed"]), cl_cfg=cl_cfg)
+        clusterer = _find_clusterer(random_state=int(cl_cfg.get("random_seed", 42)), cl_cfg=cl_cfg)
         clustered_trajs = clusterer.fit_transform(tics)
         _save_intermediate(clustered_trajs, run_dir / "clustered_trajs")
         np.savetxt(run_dir / "clustered_trajs" / "cluster_centers.txt", clusterer.cluster_centers_)
 
         micro_assign = np.concatenate([np.asarray(t).reshape(-1) for t in clustered_trajs])
-
         occ_stats = compute_occupancy_stats(micro_assign, n_clusters=int(cl_cfg["n_clusters"]))
         plot_occupancy_hist(
             occ_stats["occupancies"],
@@ -400,15 +399,14 @@ def run_stage4_cluster(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, An
         }
     
     manifest = {
-        "stage": "stage4_cluster",
-        "run_dir": str(run_dir),
-        "cluster_traj_dir": str(run_dir / "cluster_trajs"),
-        "cluster_centers_path": str(run_dir / "clustered_trajs" / "cluster_centers.txt"),
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "method": cl_cfg["method"],
-        **{key: occ_stats[key] for key in occ_stats if key != "occupancies"},
+        "stage4": {
+            "cluster_traj_dir": str(run_dir / "cluster_trajs"),
+            "cluster_centers_path": str(run_dir / "clustered_trajs" / "cluster_centers.txt"),
+            "occupancy": {key: occ_stats[key] for key in occ_stats if key != "occupancies"},
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
     }
-    write_json(manifest, run_dir / "stage4_manifest.json")
+    write_json(manifest, run_dir / "manifest.json")
 
     summary = build_stage4_summary(
         run_dir=run_dir,
@@ -422,20 +420,20 @@ def run_stage4_cluster(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, An
         "run_dir": str(run_dir),
         "summary": summary,
         "plot_path": [str(run_dir / "figs" / "occupancy_hist.png")],
-        "manifest_path": str(run_dir / "stage4_manifest.json"),
     }
 
 
 # ----------------------------
 # Stage 5
 # ----------------------------
-def run_stage5_msm_scan(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, Any]:
+def run_stage5_msm_scan(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]:
     run_dir = Path(run_dir)
     ensure_dir(run_dir / "figs")
+    cfg = asdict(cfg)
 
     try:
         clustered_trajs = load_processed_from_run_dir(run_dir, "clustered_trajs")
-        dt_ns = read_json(run_dir / "stage1_manifest.json")["dt_ns_effective"]
+        dt_ns = read_json(run_dir / "manifest.json")["stage1"]["dt_ns_effective"]
         all_state = np.unique(np.concatenate(clustered_trajs).reshape(-1))
         
         msm_cfg = cfg["microMSM"]
@@ -456,7 +454,6 @@ def run_stage5_msm_scan(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, A
 
         # check msm quality
         sparsity = compute_transition_sparsity(clustered_trajs, n_states = len(all_state), lagtimes=lag_list.tolist()) 
-    
         plateau_check = its_plateau_check(its, 
                                     lag_list=lag_list.tolist(),
                                     #top_k=cfg["evaluation"]["plateau_k"], 
@@ -486,13 +483,13 @@ def run_stage5_msm_scan(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, A
             }],
         }
 
-    msm_param = {k: msm_cfg[k] for k in msm_cfg}
     manifest = {
-        "stage": "stage5_msm_scan",
-        "run_dir": str(run_dir),
-        "plot_path": str(run_dir / "figs" / "microstateMSM_its_curve.png"),
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        **msm_param,
+        "stage5": {
+            "sparsity": sparsity,
+            "plateau_check": plateau_check,
+            "plot_path": str(run_dir / "figs" / "microstateMSM_its_curve.png"),
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
     }
     write_json(manifest, run_dir / "stage5_manifest.json")
 
@@ -507,31 +504,31 @@ def run_stage5_msm_scan(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, A
         "stage": "stage5_msm_scan",
         "run_dir": str(run_dir),
         "summary": summary,
-        "plot_path": [str(run_dir / "figs" / "microstateMSM_its_curve.png")],
-        "manifest_path": str(run_dir / "stage5_manifest.json"),
+        "plot_path": [str(run_dir / "figs" / "microstateMSM_its_curve.png")]
     }
     
-def run_stage6_msm_fit(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, Any]:
+def run_stage6_msm_fit(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]:
     run_dir = Path(run_dir)
+    cfg = asdict(cfg)
     try:
         clustered_trajs = load_processed_from_run_dir(run_dir, "clustered_trajs")
-        cluster_centers = np.loadtxt(read_json(run_dir / "stage4_manifest.json")["cluster_centers_path"])
-        dt_ns = read_json(run_dir / "stage1_manifest.json")["dt_ns_effective"]
-        
+        cluster_centers = np.loadtxt(read_json(run_dir / "manifest.json")["stage4"]["cluster_centers_path"])
+        dt_ns = read_json(run_dir / "manifest.json")["stage1"]["dt_ns_effective"]
+
         msm_cfg = cfg["microMSM"]
-        selected_lag_time = msm_cfg.get("selected_lag_time", None)
+        selected_lag_time = msm_cfg["selected_lag_time"]
         selected_n_timescales = msm_cfg.get("selected_n_timescales", msm_cfg["n_timescales"])
 
         if selected_lag_time is None:
             raise ValueError(
-                "cfg['microMSM']['selected_lag_time'] in frames is required for fitting a MSM. "
+                "cfg.microMSM.selected_lag_time in frames is required for fitting a MSM. "
                 "Please set it first, for example after reviewing Stage 5."
             )
 
         msm = MarkovStateModel(lag_time=int(selected_lag_time), n_timescales=int(selected_n_timescales), 
-                               reversible_type=msm_cfg.get("reversible_type",'transpose'), ergodic_cutoff=float(msm_cfg.get("ergodic_cutoff", 0.0)))
+                               reversible_type=msm_cfg["reversible_type"], ergodic_cutoff=float(msm_cfg["ergodic_cutoff"]))
         msm.fit(clustered_trajs)
-        ck_results = ck_test(msm, clustered_trajs, num_states=int(cfg['evaluation']['ck_test_states']), plot_dir=run_dir / "figs")
+        ck_results = ck_test(msm, clustered_trajs, num_states=Metric_param.ck_test_states, plot_dir=run_dir / "figs")
         tics = load_processed_from_run_dir(run_dir, "tica_trajs")
         txx = np.concatenate(tics, axis=0)
         weights = msm.populations_[np.concatenate(clustered_trajs)]
@@ -565,20 +562,18 @@ def run_stage6_msm_fit(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, An
         pickle.dump(msm, f)
 
     ts = np.asarray(dt_ns*msm.timescales_, dtype=float)
-    msm_param = {k: msm_cfg[k] for k in msm_cfg}
     manifest = {
-        "stage": "stage6_msm_fit",
-        "run_dir": str(run_dir),
-        "microMSM_dir": str(run_dir / "microstateMSM_model.pkl"),
-        "ck_plot_path": str(run_dir / "figs" / "CK_test.png"),
-        "free_energy_plot_path": str(run_dir / "figs" / "weighted_freeenergy.png"),
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "timescales_ns": ts.tolist(),
-        "ck_test_results": ck_results,
-        "dt_ns_effective": dt_ns,
-        **msm_param,
+        "stage6": {
+            "dt_ns_effective": float(dt_ns),
+            "timescales_ns": ts.tolist(),
+            "ck_test_results": ck_results,
+            "microMSM_dir": str(run_dir / "microstateMSM_model.pkl"),
+            "ck_plot_path": str(run_dir / "figs" / "CK_test.png"),
+            "free_energy_plot_path": str(run_dir / "figs" / "weighted_freeenergy.png"),
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
     }
-    write_json(manifest, run_dir / "stage6_manifest.json")
+    write_json(manifest, run_dir / "manifest.json")
     summary = build_stage6_summary(
         run_dir=run_dir,
         ck_test_results=ck_results,
@@ -590,14 +585,14 @@ def run_stage6_msm_fit(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, An
         "run_dir": str(run_dir),
         "summary": summary,
         "plot_path": [str(run_dir / "figs" / "CK_test.png"), str(run_dir / "figs" / "weighted_freeenergy.png")],
-        "manifest_path": str(run_dir / "stage6_manifest.json"),
     }
 
     
-def run_stage7_lumpeval(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, Any]:
+def run_stage7_lumpeval(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]:
     run_dir = Path(run_dir)
+    cfg = asdict(cfg)
     try:
-        stage6_manifest = read_json(run_dir / "stage6_manifest.json")
+        stage6_manifest = read_json(run_dir / "manifest.json")["stage6"]
         with open(stage6_manifest["microMSM_dir"], 'rb') as f:
             microMSM = pickle.load(f)
         clustered_trajs = load_processed_from_run_dir(run_dir, "clustered_trajs")
@@ -608,7 +603,7 @@ def run_stage7_lumpeval(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, A
         _save_intermediate(macro_trajs, run_dir / "macro_trajs")
 
         msm = MarkovStateModel(lag_time=int(cfg["microMSM"]["selected_lag_time"]),\
-                                    reversible_type=msm_cfg.get("reversible_type",'mle'), ergodic_cutoff=float(msm_cfg.get("ergodic_cutoff", 0.0)))
+                                    reversible_type=msm_cfg["reversible_type"], ergodic_cutoff=float(msm_cfg["ergodic_cutoff"]))
         msm.fit(macro_trajs)
         occ_stat = compute_occupancy_stats(np.concatenate(macro_trajs).reshape(-1), n_clusters=int(msm_cfg["n_macrostates"]))
     except (ValueError, AssertionError) as e:
@@ -637,25 +632,26 @@ def run_stage7_lumpeval(cfg: Dict[str, Any], run_dir: str | Path) -> Dict[str, A
         }
     with open(run_dir / "macrostateMSM_model.pkl", 'wb') as f:
         pickle.dump(msm, f)
-    
-    msm_param = {k: msm_cfg[k] for k in msm_cfg}
-    ts = np.asarray(msm.timescales_, dtype=float)*stage6_manifest["dt_ns_effective"]
+
+    ts = np.asarray(msm.timescales_, dtype=float)*stage6_manifest['dt_ns_effective']
     manifest = {
-        "stage": "stage7_lumpeval",
-        "run_dir": str(run_dir),
-        "macroMSM_dir": str(run_dir / "macrostateMSM_model.pkl"),
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "timescales_ns": ts.tolist(),
-        **msm_param,
-        **occ_stat,
+        "stage7": {
+            "timescales_ns": ts.tolist(),
+            "cooccupancy": {key: occ_stat[key] for key in occ_stat if key != "occupancies"},
+            "macroMSM_dir": str(run_dir / "macrostateMSM_model.pkl"),
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        },
     }
-    write_json(manifest, run_dir / "stage7_manifest.json")
-   
+    write_json(manifest, run_dir / "manifest.json")
+    summary = build_stage7_summary(
+        run_dir=run_dir,
+        macro_occupancy=occ_stat,
+        ts=ts,
+    )
     return {
         "success": True,
         "stage": "stage7_lumpeval",
         "run_dir": str(run_dir),
-        "summary": build_stage7_summary(run_dir, occ_stat, ts),
+        "summary": summary,
         "plot_path": None,
-        "manifest_path": None,
     }
