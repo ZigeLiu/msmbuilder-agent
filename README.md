@@ -21,18 +21,18 @@ Stage 7: kinetic lumping into a few states and model evaluation, microstate MSM 
 
 
 # Setup
-If working with conda, directly running setup.sh will create new environment, install all required packages and setup API key. Please add your api key before running.
+If working with conda, directly running setup.sh after cloning the repo. This will create new environment, install all required packages and setup API key. Please add your api key before running.
 ```
 bash setup.sh
 ```
 If using other platforms, manual installation is as follows: Install MSMbuilder first by following [MSMbuilder documentation](https://github.com/msmbuilder/msmbuilder2022).
-Clone the agent repo and go to the folder. Create new virtual environment and install package, and set LLM API key for openai/google in your terminal.
+Clone the agent repo and go to the folder. Create virtual environment and follow the following command to install package and set LLM API key for openai/google.
 ```
 pip install .
 export OPENAI_API_KEY=your_api_key_here
 export GOOGLE_API_KEY=your_api_key_here
 ```
-If running a local LLM via Ollama, please make sure the Ollama server is running in another terminal. Change the model name in agent_ollama.py to the model you are using.  
+If running a local LLM via Ollama, please make sure the Ollama server is already running. Change the model name in agent_ollama.py to the model you are using.  
 
 # Running human in the loop agent 
 Running the agent with OpenAI or the model of your choice.
