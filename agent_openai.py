@@ -120,6 +120,7 @@ TOOLS = [
         "type": "function",
         "name": "get_current_status",
         "description": "Get current workflow status, current stage, current run_dir, latest summary, and latest plot path.",
+        "strict": True,
         "parameters": {
             "type": "object",
             "properties": {},
@@ -131,6 +132,7 @@ TOOLS = [
         "type": "function",
         "name": "get_current_config",
         "description": "Get the current config object.",
+        "strict": True,
         "parameters": {
             "type": "object",
             "properties": {},
@@ -142,6 +144,7 @@ TOOLS = [
         "type": "function",
         "name": "update_config_value",
         "description": "Update one config field by dotted path. value_yaml can be a scalar, list, dict, string, etc.",
+        "strict": True,
         "parameters": {
             "type": "object",
             "properties": {
@@ -156,13 +159,13 @@ TOOLS = [
         "type": "function",
         "name": "inspect_topology",
         "description": "Inspect the topology of the system. Pass user message for later use.",
+        "strict": True,
         "parameters": {
             "type": "object",
             "properties": {
-                "cfg": {"type": "object"},
                 "user_message": {"type": "string"},
             },
-            "required": ["cfg"],
+            "required": ["user_message"],
             "additionalProperties": False,
         },  
     },
@@ -170,14 +173,13 @@ TOOLS = [
         "type": "function",
         "name": "run_stage1_featurization",
         "description": "Run Stage 1: load data and featurize based on message.",
+        "strict": True,
         "parameters": {
             "type": "object",
             "properties": {
-                "cfg": {"type": "object"},
-                "message": {"type": "string"},  
-                "run_dir": {"type": "path"}
+                "message": {"type": "string"}
             },
-            "required": ["cfg", "message"],
+            "required": ["message"],
             "additionalProperties": False,
         },
     },
@@ -185,13 +187,11 @@ TOOLS = [
         "type": "function",
         "name": "run_stage2_tica_scan",
         "description": "Run Stage 2: tICA lag scan using the latest Stage 1 result in current_run_dir.",
+        "strict": True,
         "parameters": {
             "type": "object",
-            "properties": {
-                "cfg": {"type": "object"},
-                "run_dir": {"type": "path"}
-            },
-            "required": ["cfg", "run_dir"],
+            "properties": {},
+            "required": [],
             "additionalProperties": False,
         },
     },
@@ -199,13 +199,11 @@ TOOLS = [
         "type": "function",
         "name": "run_stage3_tica_fit",
         "description": "Run Stage 3: final tICA fit using current_run_dir and current config.",
+        "strict": True,
         "parameters": {
             "type": "object",
-            "properties": {
-                "cfg": {"type": "object"},
-                "run_dir": {"type": "path"}
-            },
-            "required": ["cfg", "run_dir"],
+            "properties": {},
+            "required": [],
             "additionalProperties": False,
         },
     },
@@ -213,13 +211,11 @@ TOOLS = [
         "type": "function",
         "name": "run_stage4_cluster",
         "description": "Run Stage 4: clustering using current_run_dir and current config.",
+        "strict": True,
         "parameters": {
             "type": "object",
-            "properties": {
-                "cfg": {"type": "object"},
-                "run_dir": {"type": "path"}
-            },
-            "required": ["cfg", "run_dir"],
+            "properties": {},
+            "required": [],
             "additionalProperties": False,
         },
     },
@@ -227,13 +223,11 @@ TOOLS = [
         "type": "function",
         "name": "run_stage5_msm_scan",
         "description": "Run Stage 5: MSM parameter scan using current_run_dir and current config.",
+        "strict": True,
         "parameters": {
             "type": "object",
-            "properties": {
-                "cfg": {"type": "object"},
-                "run_dir": {"type": "path"}
-            },
-            "required": ["cfg", "run_dir"],
+            "properties": {},
+            "required": [],
             "additionalProperties": False,
         },
     },
@@ -241,13 +235,11 @@ TOOLS = [
         "type": "function",
         "name": "run_stage6_msm_fit",
         "description": "Run Stage 6: MSM fit using current_run_dir and current config.",
+        "strict": True,
         "parameters": {
             "type": "object",
-            "properties": {
-                "cfg": {"type": "object"},
-                "run_dir": {"type": "path"}
-            },
-            "required": ["cfg", "run_dir"],
+            "properties": {},
+            "required": [],
             "additionalProperties": False,
         },
     },
@@ -255,13 +247,11 @@ TOOLS = [
         "type": "function",
         "name": "run_stage7_lumpeval",
         "description": "Run Stage 7: lump and evaluate model using current_run_dir and current config.",
+        "strict": True,
         "parameters": {
             "type": "object",
-            "properties": {
-                "cfg": {"type": "object"},
-                "run_dir": {"type": "path"}
-            },
-            "required": ["cfg", "run_dir"],
+            "properties": {},
+            "required": [],
             "additionalProperties": False,
         },
     },
@@ -450,6 +440,15 @@ def to_llm_messages(chat_history: List[Dict[str, Any]]) -> List[Dict[str, str]]:
         )
     return msgs
 
+def _extract_passed_stages(tool_log: List[Dict[str, Any]]) -> str:
+    seen: List[str] = []
+    for item in tool_log:
+        if item.get("tool").split("-")[0] == "run":
+            stage = item.get("tool").split("-")[-1]
+            seen.append(stage)
+    if not seen:
+        return "No stage completed yet."
+    return "\n".join(f"🟢 {stage}" for stage in seen)
 
 def run_agent_once(
     user_message: str,
@@ -554,7 +553,8 @@ def run_agent_once(
 
     st.current_cfg_state = load_yaml_config_state(st.current_run_dir / "config.yaml", touched_sections=set(st.current_cfg_state.touched_sections))
     st.current_cfg_yaml = dump_config_yaml(st.current_cfg_state)
-    tool_log = [log['tool'] for log in st.tool_log] if st.tool_log else []
+    #tool_log = [log['tool'] for log in st.tool_log] if st.tool_log else []
+    tool_log = _extract_passed_stages(st.tool_log)
 
     return (
         chat_history,

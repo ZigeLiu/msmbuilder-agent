@@ -41,8 +41,8 @@ class Plot_param:
 
     # Axes
     axes_linewidth: float = 1.2
-    show_top_spine: bool = False
-    show_right_spine: bool = False
+    show_top_spine: bool = True
+    show_right_spine: bool = True
     grid: bool = False
 
     # Ticks
