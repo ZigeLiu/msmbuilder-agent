@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import copy
-import json
+import json, html
 from dataclasses import dataclass, field, asdict, fields
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -107,6 +107,9 @@ Your role:
 Important rules:
 - Provide feature selection suggestions based on the user's request and the system's topology.\
 Include keywords when suggesting: angle, torsion, dihedral, rotamer, sidechain, ligand, binding, unbinding, pocket, pose.
+- If user provided residue selections when calling inspect data tool, summarize the selections and wrap them with {} in your response. \
+For example, if the user selected residues 10 to 20 in chain A and residues 40 to 50 in chain B, your response should \
+include: {A: [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], B: [40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]}.
 - Stage 3 requires tica.selected_lag_time to be set.
 - Stage 6 requires microMSM.selected_lag_time to be set.
 - If the user says 'ok', 'continue', or 'next', usually move to the next stage without editing config.
@@ -297,6 +300,7 @@ def tool_update_config_value(st: SessionState, path: str, value_yaml: str) -> Di
     }
     set_nested_key(st.current_cfg_state.config, path, value)
     st.current_cfg_yaml = dump_config_yaml(st.current_cfg_state)
+    save_config(st.current_cfg_state, st.current_run_dir / "config.yaml")
     return {
         "success": True,
         "updated_path": path,
@@ -348,6 +352,15 @@ def tool_run_stage(st: SessionState, stage: int, args: Dict[str, Any]) -> Dict[s
     if result.get("success"):
         for section_name in stage_sections.get(stage, []):
             st.current_cfg_state.touched_sections.add(section_name)
+
+    config_path = st.current_run_dir / "config.yaml"
+    if config_path.exists():
+        touched_sections = set(st.current_cfg_state.touched_sections)
+        st.current_cfg_state = load_yaml_config_state(
+            config_path,
+            touched_sections=touched_sections,
+        )
+        st.current_cfg_yaml = dump_config_yaml(st.current_cfg_state)
 
     st.current_stage = stage_done_flag
     st.latest_summary = result.get("summary", "")
@@ -440,15 +453,36 @@ def to_llm_messages(chat_history: List[Dict[str, Any]]) -> List[Dict[str, str]]:
         )
     return msgs
 
-def _extract_passed_stages(tool_log: List[Dict[str, Any]]) -> str:
+def _extract_passed_stages(tool_log: List[Dict[str, Any]]) -> str: #add note from LLM
     seen: List[str] = []
     for item in tool_log:
-        if item.get("tool").split("-")[0] == "run":
-            stage = item.get("tool").split("-")[-1]
+        if item.get("tool").split("_")[0] == "run":
+            stage = item.get("tool").split("_")[-1]
             seen.append(stage)
     if not seen:
         return "No stage completed yet."
     return "\n".join(f"🟢 {stage}" for stage in seen)
+
+TEMPLATE = Path("./msm_agent/vis_box.html").read_text()
+def build_html(file: str, st: SessionState):
+    if file is None:
+        return "<h3>No structure loaded</h3>"
+    pdb_text = Path(file).read_text()
+    viewer_html = TEMPLATE.replace(
+        "__PDB_TEXT__",
+        json.dumps(pdb_text),
+    )
+    output_path = Path(st.current_run_dir / "viewer_content.html")
+    output_path.write_text(viewer_html, encoding="utf-8")
+    print(f"Wrote viewer HTML to {output_path.resolve()}")
+    st.current_cfg_state.config.data.topology = str(file)
+    save_config(st.current_cfg_state, st.current_run_dir / "config.yaml")
+    st.current_cfg_yaml = dump_config_yaml(st.current_cfg_state)
+    return (
+        '<iframe style="width:100%;height:80vh;border:0" '
+        f'srcdoc="{html.escape(viewer_html, quote=True)}"></iframe>', st, st.current_cfg_yaml
+    )
+
 
 def run_agent_once(
     user_message: str,
@@ -472,10 +506,10 @@ def run_agent_once(
         )
 
     st.current_cfg_state = cfg_state
-    st.current_run_dir = Path(cfg_state.config.run_dir) if cfg_state.config.run_dir else None
+    st.current_run_dir = Path(cfg_state.config.run_dir) #if cfg_state.config.run_dir else None
     st.current_cfg_yaml = dump_config_yaml(cfg_state)
-    if st.current_run_dir is not None:
-        save_config(cfg_state, st.current_run_dir / "config.yaml")
+    #if st.current_run_dir is not None:
+    save_config(cfg_state, st.current_run_dir / "config.yaml") # save user updated cfg for safe
     # 2) Append user message to UI chat history
     chat_history = chat_history or []
     chat_history.append({"role": "user", "content": user_message})
@@ -551,9 +585,8 @@ def run_agent_once(
 
     chat_history.append({"role": "assistant", "content": assistant_text})
 
-    st.current_cfg_state = load_yaml_config_state(st.current_run_dir / "config.yaml", touched_sections=set(st.current_cfg_state.touched_sections))
-    st.current_cfg_yaml = dump_config_yaml(st.current_cfg_state)
-    #tool_log = [log['tool'] for log in st.tool_log] if st.tool_log else []
+    #st.current_cfg_state = load_yaml_config_state(st.current_run_dir / "config.yaml", touched_sections=set(st.current_cfg_state.touched_sections))
+    #st.current_cfg_yaml = dump_config_yaml(st.current_cfg_state)
     tool_log = _extract_passed_stages(st.tool_log)
 
     return (
@@ -598,16 +631,32 @@ def build_app():
                     placeholder='Examples: "run featurization", "set selected tica lagtime to 3 and run tica scan"',
                 )
                 btn_send = gr.Button("Send")
+                tool_log = gr.Textbox(label="Tool Usage", lines=12)
                 latest_image = gr.Gallery(label="Output figure", columns=1, height="500", object_fit="contain")
 
             with gr.Column(scale=1):
+                pdb_file = gr.File(
+                    label="PDB structure",
+                    file_types=[".pdb", ".ent"],
+                    type="filepath",
+                )
+                load_button = gr.Button(
+                    "Load structure",
+                    variant="primary",
+                )
+                viewer_html = gr.HTML(label="Topology viewer", height=400)
                 cfg_editor = gr.Code(
                     label="Current config (YAML)",
                     language="yaml",
                     value=initial_session.current_cfg_yaml,
                 )
-                tool_log = gr.Textbox(label="Tool Usage", lines=12)
 
+        load_button.click(
+            fn=build_html,
+            inputs=[pdb_file, st],
+            outputs=[viewer_html, st, cfg_editor],
+        )
+        #st.current_cfg_state.config.data.topology = pdb_file.value
         btn_send.click(
             fn=run_agent_once,
             inputs=[user_in, chat, cfg_editor, st],

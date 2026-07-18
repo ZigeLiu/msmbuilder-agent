@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<title>$3Dmol Viewer</title>
+	<style>
+		head,
+		body {
+			margin: 0;
+			border: 0;
+			padding: 0;
+			max-height: 100vh
+		}
+	</style>
+	<script>
+		var glviewer = null;
+		var labels = [];
+
+		var addLabels = function () {
+			var atoms = glviewer.getModel().selectedAtoms({
+				atom: "CA"
+			});
+			for (var a in atoms) {
+				var atom = atoms[a];
+
+				var l = glviewer.addLabel(atom.resn + " " + atom.resi, {
+					inFront: true,
+					fontSize: 12,
+					position: {
+						x: atom.x,
+						y: atom.y,
+						z: atom.z
+					}
+				});
+				atom.label = l;
+				labels.push(atom);
+			}
+		};
+
+		var colorSS = function (viewer) {
+			//color by secondary structure
+			var m = viewer.getModel();
+			m.setColorByFunction({}, function (atom) {
+				if (atom.ss == 'h') return "magenta";
+				else if (atom.ss == 's') return "orange";
+				else return "gray";
+			});
+			viewer.render();
+		}
+
+		var atomcallback = function (atom, viewer) {
+			if (atom.clickLabel === undefined
+				|| !atom.clickLabel instanceof $3Dmol.Label) {
+				atom.clickLabel = viewer.addLabel(atom.resn + " " + atom.resi, {
+					fontSize: 14,
+					position: {
+						x: atom.x,
+						y: atom.y,
+						z: atom.z
+					},
+					backgroundColor: "black"
+				});
+				atom.clicked = true;
+			}
+
+			//toggle label style
+			else {
+
+				if (atom.clicked) {
+					var newstyle = atom.clickLabel.getStyle();
+					newstyle.backgroundColor = 0x66ccff;
+
+					viewer.setLabelStyle(atom.clickLabel, newstyle);
+					atom.clicked = !atom.clicked;
+				}
+				else {
+					viewer.removeLabel(atom.clickLabel);
+					delete atom.clickLabel;
+					atom.clicked = false;
+				}
+
+			}
+		};
+		function initViewer() {
+			const data = __PDB_TEXT__;
+			glviewer = $3Dmol.createViewer("gldiv", {
+				defaultcolors: $3Dmol.rasmolElementColors
+			});
+			glviewer.setBackgroundColor(0xffffff);
+			receptorModel = m = glviewer.addModel(data, "pdb");
+			//glviewer.setStyle({hetflag:false},{cartoon:{}});
+			//addLabels(glviewer);
+			colorSS(glviewer);
+
+			atoms = m.selectedAtoms({ atom: "CA" });
+
+			for (var i in atoms) {
+				var atom = atoms[i];
+				atom.clickable = true;
+				atom.callback = atomcallback;
+			}
+
+			glviewer.zoomTo();
+			glviewer.render();
+		}
+	</script>
+</head>
+
+<body>
+	<div id="gldiv" style="width: 100%; height: 80vh; margin: 0; padding: 0; border: 0;"></div>
+	<script src="https://3Dmol.org/build/3Dmol-min.js" onload="initViewer()"></script>
+	<button id="show cartoon", onclick="glviewer.setStyle({hetflag:false},{cartoon:{}}); glviewer.render();">Show Cartoon</button>
+	<button id="show sticks", onclick="glviewer.setStyle({}, {stick: {radius: 0.2}}); glviewer.render();">Show Sticks</button>
+	<hr style="margin: 0;">
+</body>
+
+</html>

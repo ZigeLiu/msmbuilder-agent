@@ -35,11 +35,11 @@ def build_stage1_summary(
     uniq_dims = np.unique(feature_dims)
     lines.append(f"Feature dimension(s): {uniq_dims}")
     if len(uniq_dims) > 1:
-        lines.append(f"Warning: Feature dimensions are not consistent, have {uniq_dims}")
+        lines.append(f"Warning: Feature dimensions are not consistent, have {uniq_dims}. Address before proceeding")
     elif uniq_dims[0] < 5:
         lines.append("Warning: Feature dimension is already low, skip stage 2 or use a different set of features.")
     if contact_test:
-        lines.append(f"Fraction of pairs in contact: {contact_test.get('in_contact_fraction', 'NA')}")
+        lines.append(f"Fraction of pairs in contact: {contact_test.get('in_contact_fraction', 'Did not find')}")
         if contact_test.get("in_contact_fraction", 0) < Metric_param.conact_freq_threshold:
             lines.append("Warning: Low fraction of frames with contacts, may be due to a small distance cutoff or a large set of distances.")
             lines.append("Warning: First consider increasing the distance cutoff")
@@ -48,7 +48,8 @@ def build_stage1_summary(
     lines += [
         f"Saved features: {run_dir / 'features'}",
         "",
-        "Please review featurization results. Address any warning message before proceeding.",
+        "Please review featurization results. Feature dimension shuold be adequate to capture conformational changes.",
+        "But too high dimensional features turns noisy and hard to handle.",
     ]
     return "\n".join(lines)
 
@@ -83,7 +84,7 @@ def build_stage2_summary(
         ]
     lines += [
         "",
-        "Please review the ITS curve for tICA parameter scan. Address any warning message before proceeding",
+        "Please review the results for tICA parameter scan. Set selected_lag_time and selected_n_components in TICAConfig to proceed.",
     ]
     return "\n".join(lines)
 
@@ -108,7 +109,8 @@ def build_stage3_summary(
 
     lines += [
         "",
-        "Please review the final tICA embeddings. Address any warning message before proceeding",
+        "Please review the final tICA results. Conformations in a good tICA projection should be well separated.",
+        "Revise your tICA results if the projectoins are heavily overlapping.",
     ]
     return "\n".join(lines)
 
@@ -127,6 +129,10 @@ def build_stage4_summary(
         f"Occupied clusters: {occupancy['n_used']} out of {occupancy['n_clusters']} total clusters",
         f"Tiny clusters (occupancy < {cl_cfg.get('tiny_threshold', 10)}): {occupancy['tiny_frac']:.4f} fraction",
     ]
+    if cl_cfg["cv_path"]:
+        lines += [
+            f"Clustering done with user specified collective variable {cl_cfg['cv_path']}"
+        ]
     if occupancy['tiny_flag']:
         lines += [
             "Warning: A large fraction of clusters are tiny, which may indicate that the clustering is too fine-grained.",
@@ -134,7 +140,8 @@ def build_stage4_summary(
         ]
     lines += [
         "",
-        "Please review the clustering results. Address any warning message before proceeding",
+        "Please review the clustering results. ",
+        "A good clustering assignment should be evenly populated with a small fraction of tiny clusters.",
     ]
     return "\n".join(lines)
 
@@ -165,7 +172,10 @@ def build_stage5_summary(
         ]
     lines += [
         "",
-        "Please review the MSM quality metrics. Address any warning message before proceeding.",
+        "Please review the MSM quality metrics.",
+        "A good microstate MSM should be markovian indicated by passing CK test and plateaued ITS.",
+        "A good microstate MSM should preserve meaningful transitions indicated by no disconnected states.",
+        "Set selected_lag_time and selected_n_timescales in microMSMConfig to proceed.",
     ]
     return "\n".join(lines)
 
@@ -187,7 +197,10 @@ def build_stage6_summary(
         ]
     lines += [
         "",
-        "Please review the MSM test results. Address any warning message before proceeding.",
+        "Please review the MSM test results.",
+        "Set n_macrostates in macroMSMConfig refering to the number of separated timescales brfore proceeding.",
+        "Macrostate MSM works well for capturing the kinetics with top well separated timescales in microstate MSM ITS.",
+        "Results can turn noisy if n_macrostates is too large",
         "Note that the estimated timescales will be slower after lumping.",
     ]
     return "\n".join(lines)

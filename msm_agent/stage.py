@@ -47,7 +47,7 @@ from msm_agent.plots import (
     plot_free_energy,
 )
 from msm_agent.parameters import Metric_param
-from msm_agent.config import AgentConfig
+from msm_agent.config import AgentConfig, save_config
 
 # ----------------------------
 # JSON / IO helpers
@@ -79,10 +79,13 @@ def ensure_dir(p: Path) -> Path:
     p.mkdir(parents=True, exist_ok=True)
     return p
 
-def load_processed_from_run_dir(run_dir: str | Path, data_type: str) -> List[np.ndarray]:
-    assert data_type in ["features", "tica_trajs", "clustered_trajs"], f"Unknown data_type: {data_type}"
+def load_processed_from_run_dir(run_dir: str | Path, data_type: str | None = None) -> List[np.ndarray]:
     run_dir = Path(run_dir)
-    load_dir = run_dir / data_type
+    if data_type is None:
+        load_dir = run_dir
+    else:
+        assert data_type in ["features", "tica_trajs", "clustered_trajs"], f"Unknown data_type: {data_type}"
+        load_dir = run_dir / data_type
     if not load_dir.exists():
         raise ValueError(f"Directory not found: {load_dir}")
 
@@ -183,12 +186,17 @@ def run_stage2_tica_scan(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any
         features = load_processed_from_run_dir(run_dir, "features")
 
         dt_ns = float(manifest["stage1"]["dt_ns_effective"])
+        feat_dim = int(manifest["stage1"]["feature_dims"])
 
         tica_cfg = cfg["tica"]
         lag_min = int(tica_cfg["lag_time_frames_range"][0])
         lag_max = int(tica_cfg["lag_time_frames_range"][1])
         grid_size = int(tica_cfg["lag_time_frames_grid_size"])
         n_components = int(tica_cfg["n_components"])
+        n_components = min(feat_dim, n_components) 
+        # update cfg and save
+        cfg["tica"]["n_components"] = n_components
+        save_config(cfg, run_dir / "config.yaml")
 
         lag_list = np.linspace(lag_min, lag_max, num=grid_size, dtype=int)
         lag_list = np.unique(lag_list)
@@ -360,7 +368,10 @@ def run_stage4_cluster(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]:
     cfg = asdict(cfg)
 
     try:
-        tics = load_processed_from_run_dir(run_dir, "tica_trajs")
+        if cfg["clustering"]["cv_path"] is not None: #prioritize processed cv
+            tics = load_processed_from_run_dir(cfg["clustering"]["cv_path"])
+        else:
+            tics = load_processed_from_run_dir(run_dir, "tica_trajs")
         cl_cfg = cfg["clustering"]
         clusterer = _find_clusterer(random_state=int(cl_cfg.get("random_seed", 42)), cl_cfg=cl_cfg)
         clustered_trajs = clusterer.fit_transform(tics)
@@ -432,17 +443,21 @@ def run_stage5_msm_scan(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]
     cfg = asdict(cfg)
 
     try:
-        clustered_trajs = load_processed_from_run_dir(run_dir, "clustered_trajs")
+        if cfg["microMSM"]["micro_assign_path"] is not None:
+            clustered_trajs = load_processed_from_run_dir(cfg["microMSM"]["micro_assign_path"])
+        else:
+            clustered_trajs = load_processed_from_run_dir(run_dir, "clustered_trajs")
         dt_ns = read_json(run_dir / "manifest.json")["stage1"]["dt_ns_effective"]
         all_state = np.unique(np.concatenate(clustered_trajs).reshape(-1))
         
         msm_cfg = cfg["microMSM"]
         lag_list = np.linspace(int(msm_cfg["lag_time_frames_range"][0]),int(msm_cfg["lag_time_frames_range"][1]),\
                                num=int(msm_cfg["lag_time_frames_grid_size"]), dtype=int)
+        n_timescales = int(msm_cfg["n_timescales"]) if msm_cfg["n_timescales"] else int(cfg["clustering"]["n_clusters"])-1
         its = compute_msm_its(
             clustered_trajs=clustered_trajs,
             lag_list=lag_list,
-            n_timescales=int(msm_cfg["n_timescales"]),
+            n_timescales=n_timescales,
             dt_ns=dt_ns,
             reversible_type=msm_cfg["reversible_type"],
             ergodic_cutoff=float(msm_cfg["ergodic_cutoff"]),
@@ -511,13 +526,16 @@ def run_stage6_msm_fit(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]:
     run_dir = Path(run_dir)
     cfg = asdict(cfg)
     try:
-        clustered_trajs = load_processed_from_run_dir(run_dir, "clustered_trajs")
+        if cfg["microMSM"]["micro_assign_path"] is not None:
+            clustered_trajs = load_processed_from_run_dir(cfg["microMSM"]["micro_assign_path"])
+        else:
+            clustered_trajs = load_processed_from_run_dir(run_dir, "clustered_trajs")
         cluster_centers = np.loadtxt(read_json(run_dir / "manifest.json")["stage4"]["cluster_centers_path"])
         dt_ns = read_json(run_dir / "manifest.json")["stage1"]["dt_ns_effective"]
 
         msm_cfg = cfg["microMSM"]
         selected_lag_time = msm_cfg["selected_lag_time"]
-        selected_n_timescales = msm_cfg.get("selected_n_timescales", msm_cfg["n_timescales"])
+        selected_n_timescales = msm_cfg.get("selected_n_timescales", cfg["clustering"]["n_clusters"]-1)
 
         if selected_lag_time is None:
             raise ValueError(
@@ -595,9 +613,13 @@ def run_stage7_lumpeval(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]
         stage6_manifest = read_json(run_dir / "manifest.json")["stage6"]
         with open(stage6_manifest["microMSM_dir"], 'rb') as f:
             microMSM = pickle.load(f)
-        clustered_trajs = load_processed_from_run_dir(run_dir, "clustered_trajs")
+        if cfg["microMSM"]["micro_assign_path"] is not None:
+            clustered_trajs = load_processed_from_run_dir(cfg["microMSM"]["micro_assign_path"])
+        else:
+            clustered_trajs = load_processed_from_run_dir(run_dir, "clustered_trajs")
 
         msm_cfg = cfg["macroMSM"]
+        assert msm_cfg["n_macrostates"] is not None, "Set n_macrostates before proceeding"
         lumper = getattr(lump_module, msm_cfg["lump_method"]).from_msm(microMSM, n_macrostates=msm_cfg["n_macrostates"])
         macro_trajs = lumper.transform(clustered_trajs)
         _save_intermediate(macro_trajs, run_dir / "macro_trajs")

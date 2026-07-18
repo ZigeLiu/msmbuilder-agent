@@ -1,5 +1,5 @@
 from pathlib import Path
-import os
+import os, json, html
 import glob
 import itertools
 from functools import partial
@@ -136,6 +136,18 @@ def decide_feature_selection(cfg: dict, request: str, run_dir: str | Path) -> di
         "ligand", "binding", "unbinding", "pocket", "pose"
     ])
 
+    if "{" in text and "}" in text:
+        sele = text.split("{")[1].split("}")[0].strip().split(",")
+        chain = [s.split(":")[0].strip() for s in sele]
+        seleid = [s.split(":")[1].strip() for s in sele]
+        decision["feature"] = FEATURE_SET["interface"]
+        decision["feature"]["parameters"]["atom_selection"][0].append(f"chainid {chain[0]} and name CA and ".join([f"resSeq {id}" for id in seleid[0]]))
+        decision['feature']['parameters']['atom_selection'][1].append(f"chainid {chain[1]} and name CA and ".join([f"resSeq {id}" for id in seleid[1]]))
+        decision["reason"].append(
+            f"User provided residue selections: {sele}. Using these selections for interface feature."
+        )
+        return decision
+
     if has_nucleic_acid:
         decision["feature"] = FEATURE_SET["heavy_atom_distances"]
         decision["feature"]["parameters"]["atom_selection"] = ["name N or name P"]
@@ -145,7 +157,7 @@ def decide_feature_selection(cfg: dict, request: str, run_dir: str | Path) -> di
         )
         return decision
 
-    if has_ligand and wants_binding:
+    if has_ligand and wants_binding: # ligand binding
         ligands = [e == 'ligand' for e in inspect['entity']]
         ligand_id = np.where(ligands)[0]
 
@@ -250,8 +262,9 @@ def load_feature(cfg: dict, message: str, run_dir: Path):
         if not data_dir or not top:
             raise ValueError("Both data_dir and topology are required for processing data of kind xtc, dcd, trr")
         # decide feature selection 
-        decision = decide_feature_selection(cfg, message, run_dir)
-        cfg['features'] = decision['feature']['parameters']  # update cfg with the selected feature parameters
+        if not cfg["features"]["type"]: # empty feature, update
+            decision = decide_feature_selection(cfg, message, run_dir)
+            cfg['features'] = decision['feature']['parameters']  # update cfg with the selected feature parameters
         feature_type = cfg["features"]["type"]
         feature_selection = cfg["features"]["selection"] # list of angles or single distacne type
         pair_selection = cfg["features"].get("pair_selection", None)
