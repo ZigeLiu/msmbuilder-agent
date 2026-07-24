@@ -99,14 +99,11 @@ def load_processed_from_run_dir(run_dir: str | Path, data_type: str | None = Non
 # ----------------------------
 # Stage 1
 # ----------------------------
-def run_stage1_featurization(cfg: AgentConfig, message: str, run_dir: Path = None) -> Dict[str, Any]:
-    if not run_dir.exists():
-        run_dir.mkdir(parents=True, exist_ok=True)
+def run_stage1_featurization(cfg: AgentConfig, run_dir: Path = None) -> Dict[str, Any]:
     cfg = asdict(cfg)  
-
     try:
         # priority: processed, pair selection, atom selection
-        features, dt_ps_effective = load_feature(cfg, message, run_dir)
+        features, dt_ps_effective = load_feature(cfg, run_dir)
         traj_lens = [len(x) for x in features]
         feature_dims = [
             int(x.shape[1]) if getattr(x, "ndim", None) == 2 else None

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from matplotlib import rcParams
 
-@dataclass(frozen=False)
+@dataclass(frozen=True)
 class Metric_param:
     occupancy_tiny_threshold: int = 10
     occupancy_tiny_frac_threshold: float = 0.2
@@ -20,7 +20,7 @@ class Metric_param:
     conact_freq_threshold: float = 0.1
     distance_cutoff: float = 0.8
 
-@dataclass(frozen=False)
+@dataclass(frozen=True)
 class Auto_set:
     max_try: int = 100
 

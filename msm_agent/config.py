@@ -11,27 +11,43 @@ import yaml
 
 SECTION_NAMES = ("data", "features", "tica", "clustering", "microMSM", "macroMSM")
 
+@dataclass
+class ConfigBase:
+    def __post_init__(self):
+        self._validate()
+
+    def _validate(self):
+        for f in fields(self):
+            choices = f.metadata.get("choices")
+            if choices is None:
+                continue
+            value = getattr(self, f.name)
+            if value is None:
+                continue
+            if value not in choices:
+                raise ValueError(
+                    f"{f.name}={value!r}; expected one of {choices}"
+                )
 
 @dataclass
-class DataConfig:
-    kind: str = "xtc"
+class DataConfig(ConfigBase):
+    kind: str = field(default="xtc", metadata={"choice": ["xtc", "dcd", "trr"]})
     dir: str = "path/to/your/xtc/files"
     topology: str = "path/to/your/topology/file.pdb"
     saving_interval: int = 1
     stride: int = 1
     load_preprocessed_dir: str = None
-
+    note: str = "Info about this system"
 
 @dataclass
-class FeaturesConfig:
-    type: str | None = None
-    selection: str | None = None
+class FeaturesConfig(ConfigBase):
+    type: str | None = field(default=None, metadata={"choice": ["distance", "angle", "custom"]})
+    selection: str | None = field(default=None, metadata={"choice": ["distances", "displacements", "neighbors", "phi", "psi", "chi1", "chi2", "chi3", "chi4", "omega"]})
     atom_selection: Path | None = None
     pair_selection: Path | None = None
 
-
 @dataclass
-class TICAConfig:
+class TICAConfig(ConfigBase):
     lag_time_frames_range: list = field(default_factory=lambda: [1, 50])
     n_components: int = 4
     lag_time_frames_grid_size: int = 20
@@ -39,35 +55,32 @@ class TICAConfig:
     selected_n_components: int = 4
 
 @dataclass
-class ClusterConfig:
-    method: str = "KMeans"
+class ClusterConfig(ConfigBase):
+    method: str = field(default="kmeans", metadata={"choice": ["KCenters","KMeans","KMedoids","MiniBatchKMedoids","MiniBatchKMeans"]})
     n_clusters: int = 200
     random_seed: int = 42
     cv_path: Path | None = None
 
-
 @dataclass
-class microMSMConfig:
+class microMSMConfig(ConfigBase):
     lag_time_frames_range: list = field(default_factory=lambda: [1, 50])
     lag_time_frames_grid_size: int = 20
     n_timescales: int | None = None
-    reversible_type: str = "transpose"
+    reversible_type: str = field(default="transpose", metadata={"choice": ["transpose", "mle"]})
     ergodic_cutoff: bool = False
     selected_lag_time: int = None
     selected_n_timescales: int = None
     micro_assign_path: str | None = None
 
-
 @dataclass
-class macroMSMConfig:
+class macroMSMConfig(ConfigBase):
     n_macrostates: int = None
     lump_method: str = "PCCAPlus"
     reversible_type: str = "mle"
     ergodic_cutoff: bool = False
 
-
 @dataclass
-class AgentConfig:
+class AgentConfig(ConfigBase):
     data: DataConfig = field(default_factory=DataConfig)
     features: FeaturesConfig = field(default_factory=FeaturesConfig)
     tica: TICAConfig = field(default_factory=TICAConfig)
@@ -78,12 +91,10 @@ class AgentConfig:
     default_factory=lambda: Path(f"results/{datetime.now():%Y%m%d_%H%M%S}")
 )
 
-
 @dataclass
-class ConfigState:
+class ConfigState(ConfigBase):
     config: AgentConfig
     touched_sections: set[str] = field(default_factory=set)
-
 
 def from_dict(cls, data: dict[str, Any]):
     kwargs = {}

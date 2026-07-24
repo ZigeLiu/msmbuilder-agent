@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 import json, html
-from dataclasses import dataclass, field, asdict, fields
+from dataclasses import dataclass, field, asdict, fields, is_dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
@@ -35,30 +35,12 @@ from msm_agent.parameters import Plot_param
 # ----------------------------
 # Config helpers
 # ----------------------------
-def set_nested_key(cfg: Any, path: str, value: Any) -> None:
-    parts = path.split(".")
-    cur = cfg
-    for p in parts[:-1]:
-        if isinstance(cur, dict):
-            if p not in cur or not isinstance(cur[p], dict):
-                cur[p] = {}
-            cur = cur[p]
-        else:
-            cur = getattr(cur, p)
-    if isinstance(cur, dict):
-        cur[parts[-1]] = value
-    else:
-        setattr(cur, parts[-1], value)
-
 def init_config_state() -> ConfigState:
     init_config = AgentConfig()
+    run_dir = init_config.run_dir
+    if not run_dir.exists():
+        run_dir.mkdir(parents=True, exist_ok=True)
     return ConfigState(config=init_config, touched_sections=set(["data"]))
-
-def mark_path_worked(st: ConfigState, path: str) -> None:
-    section_name = path.split(".", 1)[0]
-    if section_name in {"data", "features", "tica", "clustering", "microMSM", "macroMSM"}:
-        st.touched_sections.add(section_name)
-
 
 # ----------------------------
 # Session state
@@ -98,18 +80,25 @@ Your role:
   5) Stage 5: scan parameters to build a Markov state model with cluster labels
   6) Stage 6: build a Markov state model with cluster labels
   7) Stage 7: lump clusters according to transitions and evaluate the model
-- If the user asks to modify config, use update_config_value first, then rerun the relevant stage.
-- Do not rewrite the whole YAML unless necessary. Prefer update_config_value.
-- After each tool result, summarize clearly and ask the user what they want to do next.
+- If the user have specified their desired config, use update_config_value to sequentially update all values first, then rerun the relevant stage.
+- After each tool result, summarize clearly and concisely and ask the user what they want to do next.
 - If a tool call is not successful, inspect errors in the result and include possible reasons in your responses.
 - Provide parameter tuning suggestions when receiving hints.
 
 Important rules:
-- Provide feature selection suggestions based on the user's request and the system's topology.\
-Include keywords when suggesting: angle, torsion, dihedral, rotamer, sidechain, ligand, binding, unbinding, pocket, pose.
-- If user provided residue selections when calling inspect data tool, summarize the selections and wrap them with {} in your response. \
+- For feature selection, first check if preprocessed features exist. If not, follow user specified feature selections. \
+If user did not specify, inspect topology and suggest features referring to feature templates. 
+- If providing feature selection suggestions, base them on user's request and system's topology. \
+Include keywords when suggesting: angle, torsion, dihedral, rotamer, sidechain, ligand, binding, unbinding, pocket, pose. \
+Update these keywords to data.note to help featurization. 
+- If user provided residue selections to select atoms, summarize the selections and wrap them with {} in your response. \
+And update these formated selections to data.note to help featurization. \
 For example, if the user selected residues 10 to 20 in chain A and residues 40 to 50 in chain B, your response should \
 include: {A: [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], B: [40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]}.
+- Do not directly generate pair selections based on residue selection: pair selection is for atom indices. \
+The safe way is to add the formated residue selections to note and call tool to convert to correct atom indices.
+- If user want to *refine* feature pair selection based on contact frequency, ensure stage1 have run with distance feature. \
+Add contact frequency to data.note to help featurization.
 - Stage 3 requires tica.selected_lag_time to be set.
 - Stage 6 requires microMSM.selected_lag_time to be set.
 - If the user says 'ok', 'continue', or 'next', usually move to the next stage without editing config.
@@ -160,7 +149,7 @@ TOOLS = [
     },
     {
         "type": "function",
-        "name": "inspect_topology",
+        "name": "run_inspect_topology",
         "description": "Inspect the topology of the system. Pass user message for later use.",
         "strict": True,
         "parameters": {
@@ -278,6 +267,18 @@ def tool_get_current_config(st: SessionState) -> Dict[str, Any]:
         return {}
     return copy.deepcopy(st.current_cfg_state.config)
 
+def set_nested_key(cfg: Any, path: str, value: Any) -> None:
+    parts = path.split(".")
+    cur = cfg
+    for p in parts[:-1]:
+        if is_dataclass(cur):
+            cur = getattr(cur, p)
+        else:
+            cur = cur[p]
+    if isinstance(cur, dict):
+        cur[parts[-1]] = value
+    else:
+        setattr(cur, parts[-1], value)
 
 def tool_update_config_value(st: SessionState, path: str, value_yaml: str) -> Dict[str, Any]:
     value = yaml.safe_load(value_yaml)
@@ -307,14 +308,13 @@ def tool_update_config_value(st: SessionState, path: str, value_yaml: str) -> Di
         "new_value": value,
     }
 
-def tool_inspect_topology(st: SessionState, user_message: str) -> Dict[str, Any]:
+def tool_inspect_topology(st: SessionState) -> Dict[str, Any]:
     cfg_state = st.current_cfg_state
     st.current_stage = "inspect_topology"
     output = inspect_data(asdict(cfg_state.config))
     return {
         "success": True,
         "inspection": output,
-        "user_message": user_message,
     }
 
 
@@ -335,10 +335,7 @@ def tool_run_stage(st: SessionState, stage: int, args: Dict[str, Any]) -> Dict[s
         raise ValueError(f"Unsupported stage: {stage}")
 
     fn, stage_done_flag = stage_map[stage]
-    if stage == 1:
-        result = fn(st.current_cfg_state.config, args.get("message"), st.current_run_dir)
-    else:
-        result = fn(st.current_cfg_state.config, st.current_run_dir)
+    result = fn(st.current_cfg_state.config, st.current_run_dir)
 
     stage_sections = {
         1: ["features"],
@@ -384,21 +381,21 @@ def execute_tool(st: SessionState, name: str, args: Dict[str, Any]) -> Dict[str,
             path=args["path"],
             value_yaml=args["value_yaml"],
         )
-    elif name == "inspect_topology":
-        result = tool_inspect_topology(st, str(args.get("user_message", "")))
-    elif name in {"run_stage1", "run_stage1_featurization"}:
+    elif name == "run_inspect_topology":
+        result = tool_inspect_topology(st)
+    elif name == "run_stage1_featurization":
         result = tool_run_stage(st, 1, args)
-    elif name in {"run_stage2", "run_stage2_tica_scan"}:
+    elif name == "run_stage2_tica_scan":
         result = tool_run_stage(st, 2, args)
-    elif name in {"run_stage3", "run_stage3_tica_fit"}:
+    elif name == "run_stage3_tica_fit":
         result = tool_run_stage(st, 3, args)
-    elif name in {"run_stage4", "run_stage4_cluster"}:
+    elif name == "run_stage4_cluster":
         result = tool_run_stage(st, 4, args)
-    elif name in {"run_stage5", "run_stage5_msm_scan"}:
+    elif name == "run_stage5_msm_scan":
         result = tool_run_stage(st, 5, args)
-    elif name in {"run_stage6", "run_stage6_msm_fit"}:
+    elif name == "run_stage6_msm_fit":
         result = tool_run_stage(st, 6, args)
-    elif name in {"run_stage7", "run_stage7_lumpeval"}:
+    elif name == "run_stage7_lumpeval":
         result = tool_run_stage(st, 7, args)
     else:
         raise ValueError(f"Unknown tool: {name}")
@@ -457,7 +454,7 @@ def _extract_passed_stages(tool_log: List[Dict[str, Any]]) -> str: #add note fro
     seen: List[str] = []
     for item in tool_log:
         if item.get("tool").split("_")[0] == "run":
-            stage = item.get("tool").split("_")[-1]
+            stage = item.get("tool") #.split("_")[1:]
             seen.append(stage)
     if not seen:
         return "No stage completed yet."
@@ -483,7 +480,6 @@ def build_html(file: str, st: SessionState):
         f'srcdoc="{html.escape(viewer_html, quote=True)}"></iframe>', st, st.current_cfg_yaml
     )
 
-
 def run_agent_once(
     user_message: str,
     chat_history: List[Dict[str, str]],
@@ -493,7 +489,7 @@ def run_agent_once(
     # 1) Sync YAML editor -> session config
     try:
         touched_sections = set(st.current_cfg_state.touched_sections) if st.current_cfg_state is not None else None
-        cfg_state = load_yaml_config_state(yaml_text, touched_sections=touched_sections)
+        cfg_state = load_yaml_config_state(yaml_text, touched_sections=touched_sections) # read from yaml 
     except Exception as e:
         chat_history = chat_history or []
         chat_history.append({"role": "assistant", "content": f"Config YAML parse error: {e}"})
@@ -504,12 +500,8 @@ def run_agent_once(
             st.latest_summary,
             st.latest_plot_path,
         )
-
-    st.current_cfg_state = cfg_state
-    st.current_run_dir = Path(cfg_state.config.run_dir) #if cfg_state.config.run_dir else None
-    st.current_cfg_yaml = dump_config_yaml(cfg_state)
-    #if st.current_run_dir is not None:
-    save_config(cfg_state, st.current_run_dir / "config.yaml") # save user updated cfg for safe
+    st.current_cfg_state = cfg_state # sync editor to st
+    
     # 2) Append user message to UI chat history
     chat_history = chat_history or []
     chat_history.append({"role": "user", "content": user_message})
@@ -582,11 +574,12 @@ def run_agent_once(
         )
 
     assistant_text = response.output_text or "Done."
-
     chat_history.append({"role": "assistant", "content": assistant_text})
 
-    #st.current_cfg_state = load_yaml_config_state(st.current_run_dir / "config.yaml", touched_sections=set(st.current_cfg_state.touched_sections))
-    #st.current_cfg_yaml = dump_config_yaml(st.current_cfg_state)
+    # read from disk for newest config after tool call, safer than passing cfg back
+    st.current_cfg_state = load_yaml_config_state(st.current_run_dir / "config.yaml", touched_sections=set(st.current_cfg_state.touched_sections))
+    st.current_cfg_yaml = dump_config_yaml(st.current_cfg_state) # updated cfg state
+
     tool_log = _extract_passed_stages(st.tool_log)
 
     return (
@@ -619,9 +612,9 @@ def build_app():
         st = gr.State(initial_session)
 
         gr.Markdown("## MSM building agent \nLLM-empowered molecular dynamics simulation analysis tool")
-        gr.Markdown("Start by adding exact path to your local data folder in config editor, " \
+        gr.Markdown("Start by loading your PDB, adding exact path to your local data folder in config editor, " \
                     "and a brief introduction of what you are interested in about your system." \
-                    "If you have your curated features, edit the path in load preprocessed dir")
+                    "If you have your curated features, add the path to load preprocessed dir")
 
         with gr.Row():
             with gr.Column(scale=1):
@@ -656,7 +649,7 @@ def build_app():
             inputs=[pdb_file, st],
             outputs=[viewer_html, st, cfg_editor],
         )
-        #st.current_cfg_state.config.data.topology = pdb_file.value
+
         btn_send.click(
             fn=run_agent_once,
             inputs=[user_in, chat, cfg_editor, st],

@@ -111,11 +111,8 @@ def decide_feature_selection(cfg: dict, request: str, run_dir: str | Path) -> di
         "warnings": [],
     }
     # contact test result exist, prioritized
-    dist_cutoff = Metric_param.distance_cutoff
-    contact_test_path = run_dir / f"contact_freq_{dist_cutoff}.npz"
-    if os.path.exists(contact_test_path):
-        #test_output = np.load(contact_test_path, allow_pickle=True)
-        #pairs = test_output['pairs']
+    contact_test_path = run_dir / f"contact_freq_{Metric_param.distance_cutoff}.npz"
+    if "contact frequency" in text and os.path.exists(contact_test_path):
         pairs = str(contact_test_path) # track file path 
         decision["feature"] = FEATURE_SET["interface"]
         decision["feature"]["parameters"]["pair_selection"] = pairs
@@ -197,8 +194,11 @@ def _find_featurizer(frame, feature_selection, atom_selection, dist_cutoff, pair
     atom_slice, atom_slice_1, atom_slice_2 = None, None, None
     if pair_selection is not None:
         try:
-            file = np.load(Path(pair_selection), allow_pickle=True)
-            pairs = file['pairs'] #np.load(pair_selection)
+            if isinstance(pair_selection, Path) or isinstance(pair_selection, str):
+                file = np.load(Path(pair_selection), allow_pickle=True)
+                pairs = file['pairs'] #np.load(pair_selection)
+            elif isinstance(pair_selection, list) or isinstance(pair_selection, np.array):
+                pairs = pair_selection
         except Exception as e:
             raise ValueError(f"Error loading pair selection file: {pair_selection}. Error: {e}")
     else:
@@ -236,7 +236,7 @@ def _transform_data(featurizer, traj):
     else:
         return featurizer(traj)
     
-def load_feature(cfg: dict, message: str, run_dir: Path):
+def load_feature(cfg: dict, run_dir: Path):
     kind = cfg["data"].get("kind", None)
     if kind is not None:
         assert kind in ["xtc", "dcd", "trr"], f"Unsupported data.kind: {kind}. Supported: xtc, dcd, trr"
@@ -244,6 +244,7 @@ def load_feature(cfg: dict, message: str, run_dir: Path):
     top = cfg["data"].get("topology", None)
     stride = int(cfg["data"].get("stride", 1))
     preprocessed_dir = cfg["data"].get("load_preprocessed_dir", None)
+    note = cfg["data"].get("note")
 
     loaded_features = []
     if preprocessed_dir is not None:
@@ -262,8 +263,8 @@ def load_feature(cfg: dict, message: str, run_dir: Path):
         if not data_dir or not top:
             raise ValueError("Both data_dir and topology are required for processing data of kind xtc, dcd, trr")
         # decide feature selection 
-        if not cfg["features"]["type"]: # empty feature, update
-            decision = decide_feature_selection(cfg, message, run_dir)
+        if cfg["features"]["type"] is None: # empty feature, update
+            decision = decide_feature_selection(cfg, note, run_dir)
             cfg['features'] = decision['feature']['parameters']  # update cfg with the selected feature parameters
         feature_type = cfg["features"]["type"]
         feature_selection = cfg["features"]["selection"] # list of angles or single distacne type
