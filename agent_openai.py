@@ -580,8 +580,8 @@ def run_agent_once(
         chat_history,
         st,
         st.current_cfg_yaml,
-        #tool_log,
-        st.tool_log,
+        tool_log,
+        #st.tool_log,
         [(p,p) for p in st.plot_path] if st.plot_path else None,
     )
 
