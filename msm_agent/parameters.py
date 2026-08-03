@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from matplotlib import rcParams
+import matplotlib.pyplot as plt
 
 @dataclass(frozen=True)
 class Metric_param:
@@ -9,7 +10,7 @@ class Metric_param:
     msm_ergodic_cutoff = False
     plateau_threshold: float = 0.1
     plateau_last_steps: int = 4
-    plateau_separate_cutoff: float = 0.9
+    plateau_separate_cutoff: float = 0.8
     plateau_top_k: int = 4
     ck_plot_only: bool = False
     ck_n_steps: int = 4
@@ -63,6 +64,19 @@ class Plot_param:
     # Error bars
     capsize: float = 3
 
+    # Colors
+    color_cycle: list[str] = (
+        "#1f77b4",  # muted blue
+        "#ff7f0e",  # safety orange
+        "#2ca02c",  # cooked asparagus green    
+        "#d62728",  # brick red
+        "#9467bd",  # muted purple
+        "#8c564b",  # chestnut brown
+        "#e377c2",  # raspberry yogurt pink
+        "#7f7f7f",  # middle gray
+    ) 
+    cmap: str = "viridis"
+
     def apply(self):
         rcParams.update({
             # Figure
@@ -110,7 +124,7 @@ class Plot_param:
             # Error bars
             "errorbar.capsize": self.capsize,
 
-            # PDF
-            "pdf.fonttype": 42,
-            "ps.fonttype": 42,
+            # Colors
+            "axes.prop_cycle": plt.cycler(color=self.color_cycle),
+            "image.cmap": self.cmap,
         })

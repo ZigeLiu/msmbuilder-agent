@@ -2,15 +2,20 @@ from __future__ import annotations
 import numpy as np
 import matplotlib.pyplot as plt
 
-def plot_tica_density_hexbin(x, y, outpath, gridsize=120):
+def plot_projection(x, y, outpath, labels, z=None, gridsize=120):
     plt.figure()
-    hb = plt.hexbin(x, y, gridsize=gridsize, bins="log", mincnt=1)
-    plt.xlabel("tIC 1")
-    plt.ylabel("tIC 2")
-    cb = plt.colorbar(hb)
-    cb.set_label("log10(count)")
+    if z is None: # density plot
+        hb = plt.hexbin(x, y, gridsize=gridsize, bins="log", mincnt=1)
+        cb = plt.colorbar(hb)
+        cb.set_label("log10(count)")
+    else: # scatter plot with color
+        plt.scatter(x, y, c=z, s=1, alpha=0.8)
+        cb = plt.colorbar()
+        cb.set_label(labels[2])
+    plt.xlabel(labels[0])
+    plt.ylabel(labels[1])
     plt.tight_layout()
-    plt.savefig(outpath, dpi=200)
+    plt.savefig(outpath,)
     plt.close()
 
 def _free_energy_2d(x, y, weights=None, bins=90, eps=1e-12):
@@ -49,13 +54,15 @@ def plot_occupancy_hist(occupancies, outpath):
     plt.savefig(outpath, dpi=200)
     plt.close()
 
-def plot_its_curve(its: dict, outpath, top_k: int = None):
-    top_k = -1 if top_k is None else top_k
+def plot_its_curve(its: dict, outpath: str, top_k: int = None):
     lags = []
     timescales = []
     for key, value in its.items():
         lags.append(float(key))
-        timescales.append(np.asarray(value[:top_k], dtype=float))
+        if top_k is None:
+            timescales.append(np.asarray(value, dtype=float))
+        else:
+            timescales.append(np.asarray(value[:top_k+1], dtype=float))
     plt.figure(figsize=(12,8))
     plt.semilogy(np.array(lags), np.array(timescales), marker="o")
     plt.xlabel("Lag time (ns)")

@@ -18,7 +18,7 @@ import msmbuilder.lumping as lump_module
 # ===== Adjust these imports to your real project layout =====
 from msm_agent.featurizationv1 import (
     _save_intermediate,
-    _find_clusterer,
+    find_clusterer,
     load_feature,
 )
 
@@ -43,7 +43,7 @@ from msm_agent.metrics import (
 from msm_agent.plots import (
     plot_its_curve,
     plot_occupancy_hist,
-    plot_tica_density_hexbin,
+    plot_projection,
     plot_free_energy,
 )
 from msm_agent.parameters import Metric_param
@@ -183,7 +183,8 @@ def run_stage2_tica_scan(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any
         features = load_processed_from_run_dir(run_dir, "features")
 
         dt_ns = float(manifest["stage1"]["dt_ns_effective"])
-        feat_dim = int(manifest["stage1"]["feature_dims"])
+        assert len(manifest["stage1"]["feature_dims"]) == 1, "All features must have the same dimension for tICA."
+        feat_dim = int(manifest["stage1"]["feature_dims"][0])
 
         tica_cfg = cfg["tica"]
         lag_min = int(tica_cfg["lag_time_frames_range"][0])
@@ -297,10 +298,11 @@ def run_stage3_tica_fit(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]
         density_plot_path: Optional[Path] = None
         if txx.ndim == 2 and txx.shape[1] >= 2:
             density_plot_path = run_dir / "figs" / "tica_density_hexbin.png"
-            plot_tica_density_hexbin(
+            plot_projection(
                 txx[:, 0],
                 txx[:, 1],
                 outpath=density_plot_path,
+                labels=["tIC 1", "tIC 2"],
             )
     except (ValueError, AssertionError) as e:
         traceback.print_exc()
@@ -370,7 +372,7 @@ def run_stage4_cluster(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]:
         else:
             tics = load_processed_from_run_dir(run_dir, "tica_trajs")
         cl_cfg = cfg["clustering"]
-        clusterer = _find_clusterer(random_state=int(cl_cfg.get("random_seed", 42)), cl_cfg=cl_cfg)
+        clusterer = find_clusterer(cl_cfg=cl_cfg)
         clustered_trajs = clusterer.fit_transform(tics)
         _save_intermediate(clustered_trajs, run_dir / "clustered_trajs")
         np.savetxt(run_dir / "clustered_trajs" / "cluster_centers.txt", clusterer.cluster_centers_)
@@ -450,7 +452,12 @@ def run_stage5_msm_scan(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]
         msm_cfg = cfg["microMSM"]
         lag_list = np.linspace(int(msm_cfg["lag_time_frames_range"][0]),int(msm_cfg["lag_time_frames_range"][1]),\
                                num=int(msm_cfg["lag_time_frames_grid_size"]), dtype=int)
-        n_timescales = int(msm_cfg["n_timescales"]) if msm_cfg["n_timescales"] else int(cfg["clustering"]["n_clusters"])-1
+        if msm_cfg["n_timescales"] is not None:
+            n_timescales = int(msm_cfg["n_timescales"])
+        else:
+            n_timescales = int(cfg["clustering"]["n_clusters"])-1
+            cfg["microMSM"]["n_timescales"] = n_timescales
+            save_config(cfg, run_dir / "config.yaml")
         its = compute_msm_its(
             clustered_trajs=clustered_trajs,
             lag_list=lag_list,
@@ -503,8 +510,7 @@ def run_stage5_msm_scan(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
     }
-    write_json(manifest, run_dir / "stage5_manifest.json")
-
+    write_json(manifest, run_dir / "manifest.json")
 
     summary = build_stage5_summary(
         run_dir=run_dir,
@@ -532,8 +538,13 @@ def run_stage6_msm_fit(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]:
 
         msm_cfg = cfg["microMSM"]
         selected_lag_time = msm_cfg["selected_lag_time"]
-        selected_n_timescales = msm_cfg.get("selected_n_timescales", cfg["clustering"]["n_clusters"]-1)
-
+        if msm_cfg["selected_n_timescales"] is not None:
+            selected_n_timescales = int(msm_cfg["selected_n_timescales"])
+        else:
+            selected_n_timescales = int(cfg["clustering"]["n_clusters"])-1
+            cfg["microMSM"]["selected_n_timescales"] = selected_n_timescales
+            save_config(cfg, run_dir / "config.yaml")
+        
         if selected_lag_time is None:
             raise ValueError(
                 "cfg.microMSM.selected_lag_time in frames is required for fitting a MSM. "
@@ -583,8 +594,7 @@ def run_stage6_msm_fit(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]:
             "timescales_ns": ts.tolist(),
             "ck_test_results": ck_results,
             "microMSM_dir": str(run_dir / "microstateMSM_model.pkl"),
-            "ck_plot_path": str(run_dir / "figs" / "CK_test.png"),
-            "free_energy_plot_path": str(run_dir / "figs" / "weighted_freeenergy.png"),
+            "plot_path": [str(run_dir / "figs" / "CK_test.png"), str(run_dir / "figs" / "weighted_freeenergy.png")],
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
     }
@@ -616,7 +626,10 @@ def run_stage7_lumpeval(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]
             clustered_trajs = load_processed_from_run_dir(run_dir, "clustered_trajs")
 
         msm_cfg = cfg["macroMSM"]
-        assert msm_cfg["n_macrostates"] is not None, "Set n_macrostates before proceeding"
+        msm_cfg["n_macrostates"] = int(msm_cfg["n_macrostates"]) if msm_cfg["n_macrostates"] else cfg["microMSM"]["selected_n_timescales"]+1
+        cfg["macroMSM"]["n_macrostates"] = msm_cfg["n_macrostates"]
+        save_config(cfg, run_dir / "config.yaml")
+
         lumper = getattr(lump_module, msm_cfg["lump_method"]).from_msm(microMSM, n_macrostates=msm_cfg["n_macrostates"])
         macro_trajs = lumper.transform(clustered_trajs)
         _save_intermediate(macro_trajs, run_dir / "macro_trajs")
@@ -625,6 +638,30 @@ def run_stage7_lumpeval(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]
                                     reversible_type=msm_cfg["reversible_type"], ergodic_cutoff=float(msm_cfg["ergodic_cutoff"]))
         msm.fit(macro_trajs)
         occ_stat = compute_occupancy_stats(np.concatenate(macro_trajs).reshape(-1), n_clusters=int(msm_cfg["n_macrostates"]))
+        dt_ns = read_json(run_dir / "manifest.json")["stage1"]["dt_ns_effective"]
+        lag_list = np.linspace(int(cfg["microMSM"]["lag_time_frames_range"][0]),int(cfg["microMSM"]["lag_time_frames_range"][1]),\
+                                       num=int(cfg["microMSM"]["lag_time_frames_grid_size"]), dtype=int)
+        its = compute_msm_its(
+            clustered_trajs=macro_trajs,
+            lag_list=lag_list,
+            n_timescales=msm_cfg["n_macrostates"]-1,
+            dt_ns=dt_ns,
+            reversible_type=msm_cfg["reversible_type"],
+            ergodic_cutoff=float(msm_cfg["ergodic_cutoff"]),
+            )
+        plot_its_curve(
+            its,
+            outpath=run_dir / "figs" / "macrostateMSM_its_curve.png",
+        )
+        tics = load_processed_from_run_dir(run_dir, "tica_trajs")
+        txx = np.concatenate(tics, axis=0)
+        plot_projection(
+            txx[:, 0],
+            txx[:, 1],
+            outpath=run_dir / "figs" / "macrostate_assignment.png",
+            labels=["tIC 1", "tIC 2", "Macrostate Assignment"],
+            z=np.concatenate(macro_trajs),
+        )
     except (ValueError, AssertionError) as e:
         traceback.print_exc()
         return {
@@ -658,6 +695,7 @@ def run_stage7_lumpeval(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]
             "timescales_ns": ts.tolist(),
             "cooccupancy": {key: occ_stat[key] for key in occ_stat if key != "occupancies"},
             "macroMSM_dir": str(run_dir / "macrostateMSM_model.pkl"),
+            "plot_path": [str(run_dir / "figs" / "macrostateMSM_its_curve.png"), str(run_dir / "figs" / "macrostate_assignment.png")],
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         },
     }
@@ -672,5 +710,5 @@ def run_stage7_lumpeval(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]
         "stage": "stage7_lumpeval",
         "run_dir": str(run_dir),
         "summary": summary,
-        "plot_path": None,
+        "plot_path": [str(run_dir / "figs" / "macrostateMSM_its_curve.png"), str(run_dir / "figs" / "macrostate_assignment.png")],
     }

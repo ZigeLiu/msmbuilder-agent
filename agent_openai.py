@@ -27,7 +27,9 @@ from msm_agent.config import (
     dump_config_yaml,
     load_yaml_config_state,
     save_config,
-    field_names,
+    ALLOWED_VAL_DICT,
+    ALLOWED_TYPE_DICT,
+    SYSTEM_PROMPT,
 )
 from msm_agent.parameters import Plot_param
 
@@ -54,7 +56,7 @@ class SessionState:
     current_stage: str = "init"
 
     latest_summary: str = ""
-    latest_plot_path: Optional[List[str]] = None
+    plot_path: Optional[List[str]] = None
     error_msg: Optional[Dict[str, Any]] = None
 
     # optional: keep tool events for debugging
@@ -66,46 +68,6 @@ class SessionState:
 # ----------------------------
 CLIENT = OpenAI()
 MODEL = "gpt-5.2"
-
-SYSTEM_PROMPT = """You are an MSM building agent for a multi-stage molecular dynamics simulation analysis workflow with MSMbuilder.
-
-Your role:
-- Help the user sequentially run through the stages.
-- Each stage has its specific tasks:
-  0) Inspect data
-  1) Stage 1: featurization
-  2) Stage 2: tICA parameter scan
-  3) Stage 3: fit tICA with selected parameters
-  4) Stage 4: cluster data points according to tICA collective variables
-  5) Stage 5: scan parameters to build a Markov state model with cluster labels
-  6) Stage 6: build a Markov state model with cluster labels
-  7) Stage 7: lump clusters according to transitions and evaluate the model
-- If the user have specified their desired config, use update_config_value to sequentially update all values first, then rerun the relevant stage.
-- After each tool result, summarize clearly and concisely and ask the user what they want to do next.
-- If a tool call is not successful, inspect errors in the result and include possible reasons in your responses.
-- Provide parameter tuning suggestions when receiving hints.
-
-Important rules:
-- For feature selection, first check if preprocessed features exist. If not, follow user specified feature selections. \
-If user did not specify, inspect topology and suggest features referring to feature templates. 
-- If providing feature selection suggestions, base them on user's request and system's topology. \
-Include keywords when suggesting: angle, torsion, dihedral, rotamer, sidechain, ligand, binding, unbinding, pocket, pose. \
-Update these keywords to data.note to help featurization. 
-- If user provided residue selections to select atoms, summarize the selections and wrap them with {} in your response. \
-And update these formated selections to data.note to help featurization. \
-For example, if the user selected residues 10 to 20 in chain A and residues 40 to 50 in chain B, your response should \
-include: {A: [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], B: [40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]}.
-- Do not directly generate pair selections based on residue selection: pair selection is for atom indices. \
-The safe way is to add the formated residue selections to note and call tool to convert to correct atom indices.
-- If user want to *refine* feature pair selection based on contact frequency, ensure stage1 have run with distance feature. \
-Add contact frequency to data.note to help featurization.
-- Stage 3 requires tica.selected_lag_time to be set.
-- Stage 6 requires microMSM.selected_lag_time to be set.
-- If the user says 'ok', 'continue', or 'next', usually move to the next stage without editing config.
-- If the user asks to rerun, use the newest config and rerun the current stage.
-- If the user asks to change parameters, confirm which parameters to change with the user, then update the config and rerun the current stage.
-- Keep responses concise, practical, and stage-aware.
-"""
 
 TOOLS = [
     {
@@ -168,10 +130,8 @@ TOOLS = [
         "strict": True,
         "parameters": {
             "type": "object",
-            "properties": {
-                "message": {"type": "string"}
-            },
-            "required": ["message"],
+            "properties": {},
+            "required": [],
             "additionalProperties": False,
         },
     },
@@ -258,7 +218,7 @@ def tool_get_current_status(st: SessionState) -> Dict[str, Any]:
         "current_stage": st.current_stage,
         "current_run_dir": st.current_run_dir,
         "latest_summary": st.latest_summary,
-        "latest_plot_path": st.latest_plot_path,
+        "plot_path": st.plot_path,
     }
 
 
@@ -290,15 +250,40 @@ def tool_update_config_value(st: SessionState, path: str, value_yaml: str) -> Di
         "new_value": value,
         "error": "No current config loaded. Please load a config before updating values.",
     }
-    allowded_path = field_names(st.current_cfg_state.config)
-    if path not in allowded_path:
+    if path not in ALLOWED_TYPE_DICT:
         return {
         "success": False,
         "updated_path": path,
         "new_value": value,
         "error": f"Unsupported config path. Allowed paths: \
-        {', '.join(allowded_path)}",
+        {', '.join(ALLOWED_TYPE_DICT.keys())}",
     }
+    if path in ALLOWED_TYPE_DICT and not type(value) in ALLOWED_TYPE_DICT[path]:
+        return {
+        "success": False,
+        "updated_path": path,
+        "new_value": value,
+        "error": f"Unsupported config type. Allowed type for {path}: \
+        {', '.join(ALLOWED_TYPE_DICT[path])}",
+    }
+    if path in ALLOWED_VAL_DICT:
+        if isinstance(value, list):
+            if not all(v in ALLOWED_VAL_DICT[path] for v in value):
+                return {
+                "success": False,
+                "updated_path": path,
+                "new_value": value,
+                "error": f"Unsupported config value. Allowed values for {path}: \
+                {', '.join(ALLOWED_VAL_DICT[path])}",
+            }
+        elif value not in ALLOWED_VAL_DICT[path]:
+            return {
+                "success": False,
+                "updated_path": path,
+                "new_value": value,
+                "error": f"Unsupported config value. Allowed values for {path}: \
+                {', '.join(ALLOWED_VAL_DICT[path])}",
+            }
     set_nested_key(st.current_cfg_state.config, path, value)
     st.current_cfg_yaml = dump_config_yaml(st.current_cfg_state)
     save_config(st.current_cfg_state, st.current_run_dir / "config.yaml")
@@ -363,9 +348,9 @@ def tool_run_stage(st: SessionState, stage: int, args: Dict[str, Any]) -> Dict[s
     st.latest_summary = result.get("summary", "")
     plot_path = result.get("plot_path")
     if isinstance(plot_path, str):
-        st.latest_plot_path = [plot_path]
-    else:
-        st.latest_plot_path = plot_path
+        st.plot_path.append(plot_path)
+    elif isinstance(plot_path, list):
+        st.plot_path.extend(plot_path)
     st.error_msg = result.get("errors","")
     return result
 
@@ -480,6 +465,15 @@ def build_html(file: str, st: SessionState):
         f'srcdoc="{html.escape(viewer_html, quote=True)}"></iframe>', st, st.current_cfg_yaml
     )
 
+def set_data_dir(directory: str, st: SessionState):
+    if not directory:
+        return st, st.current_cfg_yaml
+    st.current_cfg_state.config.data.dir = str(directory)
+    st.current_cfg_state.touched_sections.add("data")
+    st.current_cfg_yaml = dump_config_yaml(st.current_cfg_state)
+    save_config(st.current_cfg_state, st.current_run_dir / "config.yaml")
+    return st, st.current_cfg_yaml
+
 def run_agent_once(
     user_message: str,
     chat_history: List[Dict[str, str]],
@@ -498,7 +492,7 @@ def run_agent_once(
             st,
             st.current_cfg_yaml,
             st.latest_summary,
-            st.latest_plot_path,
+            st.plot_path,
         )
     st.current_cfg_state = cfg_state # sync editor to st
     
@@ -511,7 +505,7 @@ def run_agent_once(
     f"Current stage: {st.current_stage}\n"
     f"Current run_dir: {st.current_run_dir}\n"
     f"Latest summary:\n{st.latest_summary or 'None'}\n"
-    f"Latest plot path: {st.latest_plot_path or 'None'}\n"
+    f"Latest plot path: {st.plot_path or 'None'}\n"
 )
 
     input_msgs = [
@@ -533,8 +527,8 @@ def run_agent_once(
         tools=TOOLS,
     )
 
-    # 5) Tool-calling loop
-    max_loops = 8
+    # 5) Tool-calling loop TODO: wrap into a loop and retry 1 time when not success 
+    max_loops = 8 # max call 8 tools in a single pass
     loops = 0
     while loops < max_loops:
         loops += 1
@@ -586,8 +580,9 @@ def run_agent_once(
         chat_history,
         st,
         st.current_cfg_yaml,
-        tool_log,
-        [(p,p) for p in st.latest_plot_path] if st.latest_plot_path else None,
+        #tool_log,
+        st.tool_log,
+        [(p,p) for p in st.plot_path] if st.plot_path else None,
     )
 
 
@@ -600,6 +595,7 @@ def build_app():
         current_cfg_state=initial_cfg_state,
         current_cfg_yaml=dump_config_yaml(initial_cfg_state),
         current_run_dir=Path(initial_cfg_state.config.run_dir),
+        plot_path=[],
     )
    
     plotstyle = Plot_param()
@@ -637,6 +633,11 @@ def build_app():
                     "Load structure",
                     variant="primary",
                 )
+                data_dir = gr.Dropdown(
+                    label="Trajectory data directory",
+                    choices=[str(path.resolve()) for path in Path("data").iterdir() if path.is_dir()],
+                )
+                data_dir_button = gr.Button("Use data directory")
                 viewer_html = gr.HTML(label="Topology viewer", height=400)
                 cfg_editor = gr.Code(
                     label="Current config (YAML)",
@@ -648,6 +649,12 @@ def build_app():
             fn=build_html,
             inputs=[pdb_file, st],
             outputs=[viewer_html, st, cfg_editor],
+        )
+
+        data_dir_button.click(
+            fn=set_data_dir,
+            inputs=[data_dir, st],
+            outputs=[st, cfg_editor],
         )
 
         btn_send.click(

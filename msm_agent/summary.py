@@ -168,7 +168,7 @@ def build_stage5_summary(
     else: 
         lines += [
             f"Recommendation: ITS plateaued for selected components, recommended selected_lag_time for proceed: {plateau_check['min_lag']}.",
-            f"Recommendation: recommended selected_n_component for proceed: {plateau_check['separated_component']}"
+            f"Recommendation: recommended selected_n_timescales for proceed: {plateau_check['separated_component']}"
         ]
     lines += [
         "",

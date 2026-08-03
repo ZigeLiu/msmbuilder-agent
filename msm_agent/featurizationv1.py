@@ -192,42 +192,66 @@ def decide_feature_selection(cfg: dict, request: str, run_dir: str | Path) -> di
 
 def _find_featurizer(frame, feature_selection, atom_selection, dist_cutoff, pair_selection=None):
     atom_slice, atom_slice_1, atom_slice_2 = None, None, None
+
+    # Angle features do not use atom/pair selections. Handle them before the
+    # distance-selection code so a perfectly valid ``atom_selection: null``
+    # does not reject torsion features.
+    if isinstance(feature_selection, (list, tuple)):
+        return [partial(getattr(md, f"compute_{angle}")) for angle in feature_selection], None
+
     if pair_selection is not None:
         try:
             if isinstance(pair_selection, Path) or isinstance(pair_selection, str):
                 file = np.load(Path(pair_selection), allow_pickle=True)
                 pairs = file['pairs'] #np.load(pair_selection)
-            elif isinstance(pair_selection, list) or isinstance(pair_selection, np.array):
+            elif isinstance(pair_selection, (list, np.ndarray)):
                 pairs = pair_selection
         except Exception as e:
             raise ValueError(f"Error loading pair selection file: {pair_selection}. Error: {e}")
     else:
         try:
-            if len(atom_selection) == 1: # single stom selection
-                atom_slice = " and ".join(f"{x}" for x in atom_selection)
-                atom_slice = frame.topology.select(atom_slice)
+            # Preserve the original featurizer's default: distance features
+            # without an explicit atom selection use alpha carbons.
+            if atom_selection is None:
+                atom_selection = "name CA"
+            if isinstance(atom_selection, str):
+                atom_slice = frame.topology.select(atom_selection)
                 pairs = list(itertools.combinations(atom_slice, 2))
-            elif len(atom_selection) == 2: # two set of selected atoms
-                atom_slice_1 = " and ".join(f"{x}" for x in atom_selection[0])
-                atom_slice_2 = " and ".join(f"{x}" for x in atom_selection[1])
-                atom_slice_1 = frame.topology.select(atom_slice_1)
-                atom_slice_2 = frame.topology.select(atom_slice_2)
-                pairs = list(itertools.product(atom_slice_1, atom_slice_2))
+            elif isinstance(atom_selection, list):
+                if atom_selection and all(isinstance(sel, str) for sel in atom_selection):
+                    # A list of strings is one selection made from multiple
+                    # rules, e.g. ["protein", "name CA"].
+                    atom_slice = " and ".join(atom_selection)
+                    atom_slice = frame.topology.select(atom_slice)
+                    pairs = list(itertools.combinations(atom_slice, 2))
+                elif (len(atom_selection) == 2 and
+                      all(isinstance(group, list) and
+                          all(isinstance(rule, str) for rule in group)
+                          for group in atom_selection)):
+                    # Two lists describe two atom groups whose Cartesian
+                    # product forms an interface pair selection.
+                    atom_slice_1 = " and ".join(atom_selection[0])
+                    atom_slice_2 = " and ".join(atom_selection[1])
+                    atom_slice_1 = frame.topology.select(atom_slice_1)
+                    atom_slice_2 = frame.topology.select(atom_slice_2)
+                    pairs = list(itertools.product(atom_slice_1, atom_slice_2))
+                else:
+                    raise ValueError(f"Invalid atom selection structure: {atom_selection}")
             else:
-                raise ValueError(f"atom_selection must be either a single selection or a list of two selections. Got: {atom_selection}")
+                raise ValueError(f"atom_selection must be either a string or list of selections. Got: {atom_selection}")
         except Exception as e:
-            raise ValueError(f"Error parsing atom_selection: {atom_selection}. Must be one or two lists of strings compatible with mdtraj's topology.select syntax.")
+            raise ValueError(
+                f"Error parsing atom_selection: {atom_selection}. Must be an mdtraj "
+                "selection string, a list of selection rules, or two lists of rules. "
+                f"Cause: {e}"
+            ) from e
 
     if feature_selection in ["distances", "displacements"]:
         return partial(getattr(md, f"compute_{feature_selection}"), atom_pairs=pairs), pairs
     elif feature_selection == "neighbors":
         assert atom_slice is not None, "Neighbors feature requires a single set of selected atoms."
         return partial(getattr(md, f"compute_{feature_selection}"), cutoff=dist_cutoff, query_indices=atom_slice), pairs
-    else:
-        fun_list = []
-        for angle_feature in feature_selection:
-            fun_list.append(partial(getattr(md, f"compute_{angle_feature}")))
-        return fun_list if len(fun_list) >0 else None, None
+    raise ValueError(f"Unsupported feature selection: {feature_selection}")
     
 def _transform_data(featurizer, traj):
     if isinstance(featurizer, list):
@@ -272,11 +296,22 @@ def load_feature(cfg: dict, run_dir: Path):
         atom_selection = cfg["features"].get("atom_selection", None)
 
         files = sorted(glob.glob(os.path.join(data_dir, f"*.{kind}")))
+        assert files, f"No {kind} files found in {data_dir}"
         frame = md.load(top)
         if feature_type == "angle":
-            assert len(feature_selection) > 1, "Must specify at least two angle types"
-            assert all(angle_feature in ["phi", "psi", "chi1", "chi2", "chi3", "chi4", "omega"] \
-                        for angle_feature in feature_selection), f"Unsupported angle type: {feature_selection}. Supported: phi, psi, chi1, chi2, chi3, chi4, omega"
+            if isinstance(feature_selection, str):
+                feature_selection = [feature_selection]
+            if not isinstance(feature_selection, list) or not feature_selection:
+                raise ValueError("Angle selection must be an angle name or a non-empty list of angle names")
+            supported_angles = ["phi", "psi", "chi1", "chi2", "chi3", "chi4", "omega"]
+            unsupported_angles = [angle for angle in feature_selection if angle not in supported_angles]
+            if unsupported_angles:
+                raise ValueError(
+                    f"Unsupported angle type(s): {unsupported_angles}. "
+                    f"Supported: {', '.join(supported_angles)}"
+                )
+            # Save the normalized representation to the generated config.
+            cfg["features"]["selection"] = feature_selection
         elif feature_type == "distance":
             assert feature_selection in ["distances", "displacements", "neighbors"], f"Unsupported distance type: {feature_selection}. Supported: distances, displacements, neighbors"
         else:
@@ -303,12 +338,11 @@ def load_feature(cfg: dict, run_dir: Path):
     save_config(cfg, run_dir / "config.yaml")
     return loaded_features, dt_ps
 
-def _find_clusterer(random_state, cl_cfg):
+def find_clusterer(cl_cfg):
     method = cl_cfg["method"]
     assert method in ["KCenters","KMeans","KMedoids","MiniBatchKMedoids","MiniBatchKMeans"], \
         f"Unsupported clustering method: {method}. Supported: KCenters, KMeans, KMedoids, MiniBatchKMedoids, MiniBatchKMeans"
-    return getattr(cluster_module, method)(n_clusters=int(cl_cfg["n_clusters"]), random_state=random_state, \
-                                            **{k: cl_cfg[k] for k in cl_cfg if k not in ["method", "n_clusters","tiny_threshold"]})
+    return getattr(cluster_module, method)(n_clusters=int(cl_cfg["n_clusters"]), random_state=cl_cfg.get("random_seed", None))
 
 def _save_intermediate(data, out_path: Path):
     out_path.mkdir(exist_ok=True)

@@ -65,12 +65,11 @@ def compute_msm_its(clustered_trajs, lag_list, n_timescales: int, dt_ns: float, 
 
 def its_plateau_check(its: dict, lag_list: list, top_k=Metric_param.plateau_top_k, \
                       threshold=Metric_param.plateau_threshold, last_step=Metric_param.plateau_last_steps, separate_cutoff=Metric_param.plateau_separate_cutoff) -> dict:
-    top_k = -1 if top_k is None else top_k
     timescales = []
     for key, val in its.items():
         if len(val) < top_k:
-            warnings.warn(f"ITS for lag {key} has only {len(val)} timescales, less than top_k={top_k}. Setting top_k to {top_k}.")
-        top_k = len(val)
+            warnings.warn(f"ITS for lag {key} has only {len(val)} timescales, less than top_k={top_k}. Setting top_k to {len(val)} for plateau check.")
+            top_k = len(val)
         timescales.append(np.asarray(val[:top_k], dtype=float)) # [num of lag, top k]
     lagstep = np.array(lag_list, dtype=int) # [num of lag]
     timescales = np.array(timescales)
@@ -83,16 +82,17 @@ def its_plateau_check(its: dict, lag_list: list, top_k=Metric_param.plateau_top_
     rev_all_plateaued = ~all_plateaued
     min_lag = np.max(rev_all_plateaued.sum(1))+1
     plateaued = all_plateaued[-last_step:, :].all(axis=0) # make sure the time range is long for plateaue
-
-    # TODO: find largest timescale separation
     timescale_separation = timescales[:,1:] / (timescales[:,:-1] + 1e-12) # [num of lag, top k - 1]
+    #print(timescale_separation)
     timescale_separated_inv = timescale_separation > separate_cutoff # bool of [num of lag, top k -1]
-    separated_component = np.where(timescale_separated_inv.sum(0) > 0)[0][0] # the first non zero in [top k - 1] 
+    #print(timescale_separated_inv)
+    separated_component = np.where(timescale_separated_inv.sum(0) > 0)[0]#[0] # the first non zero in [top k - 1] 
+    #print(separated_component)
 
     return {
         "top_k": int(top_k),    
         "min_lag": int(lag_list[min_lag]),
-        "separated_component": int(separated_component),
+        "separated_component": separated_component[0] if len(separated_component) > 0 else top_k - 1,
         "last_step": int(last_step),
         "plateaued": plateaued,
     }
