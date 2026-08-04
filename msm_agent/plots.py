@@ -2,14 +2,16 @@ from __future__ import annotations
 import numpy as np
 import matplotlib.pyplot as plt
 
-def plot_projection(x, y, outpath, labels, z=None, gridsize=120):
+def plot_projection(x, y, outpath, labels, cmap=None, z=None, gridsize=120):
     plt.figure()
     if z is None: # density plot
         hb = plt.hexbin(x, y, gridsize=gridsize, bins="log", mincnt=1)
         cb = plt.colorbar(hb)
         cb.set_label("log10(count)")
     else: # scatter plot with color
-        plt.scatter(x, y, c=z, s=1, alpha=0.8)
+        if cmap is None:
+            cmap = plt.rcParams["image.cmap"]
+        plt.scatter(x, y, c=z, s=1, alpha=0.8, cmap=cmap)
         cb = plt.colorbar()
         cb.set_label(labels[2])
     plt.xlabel(labels[0])

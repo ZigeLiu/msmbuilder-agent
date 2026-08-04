@@ -78,10 +78,11 @@ class ClusterConfig(ConfigBase):
     n_clusters: int = 200
     random_seed: int = 42
     cv_path: Path | None = None
+    dt_ns: float = 1.0
 
 @dataclass
 class microMSMConfig(ConfigBase):
-    lag_time_frames_range: list = field(default_factory=lambda: [1, 50])
+    lag_time_frames_range: list = field(default_factory=lambda: [1, 100])
     lag_time_frames_grid_size: int = 20
     n_timescales: int | None = None
     reversible_type: str = field(default="transpose", metadata={"choice": ["transpose", "mle"]})
@@ -89,6 +90,7 @@ class microMSMConfig(ConfigBase):
     selected_lag_time: int = None
     selected_n_timescales: int = None
     micro_assign_path: str | None = None
+    dt_ns: float = 1.0
 
 @dataclass
 class macroMSMConfig(ConfigBase):
@@ -96,6 +98,9 @@ class macroMSMConfig(ConfigBase):
     lump_method: str = "PCCAPlus"
     reversible_type: str = "mle"
     ergodic_cutoff: bool = False
+    macro_assign_path: str | None = None
+    dt_ns: float = 1.0
+    lag_time: int = None
 
 @dataclass
 class AgentConfig(ConfigBase):
@@ -193,12 +198,15 @@ def serialize_config_subset(state: ConfigState) -> dict[str, Any]:
 
 def save_config(state, path):
     if isinstance(state, ConfigState):
+        state.config.run_dir = str(state.config.run_dir)
         data = asdict(state.config)
-        data["run_dir"] = str(data["run_dir"])
+        #data["run_dir"] = str(data["run_dir"])
     elif isinstance(state, AgentConfig):
+        state.run_dir = str(state.run_dir)
         data = asdict(state)
-        data["run_dir"] = str(data["run_dir"])
+        #data["run_dir"] = str(data["run_dir"])
     elif isinstance(state, dict):
+        state["run_dir"] = str(state.get("run_dir", ""))
         data = state
     else:
         raise ValueError(f"Unsupported state type: {type(state)}")
@@ -231,27 +239,41 @@ Your role:
 
 Feature selection rules:
 - For feature selection, first check if preprocessed features exist. If not, follow user specified feature selections. \
-If user did not specify, inspect topology and suggest features referring to feature templates. 
+    If user did not specify, inspect topology and suggest features referring to feature templates. 
 - If providing feature selection suggestions, base them on user's request and system's topology. \
-Include keywords when suggesting: angle, torsion, dihedral, rotamer, sidechain, ligand, binding, unbinding, pocket, pose. \
-Update these keywords to data.note to help featurization. 
+    Include keywords when suggesting: angle, torsion, dihedral, rotamer, sidechain, ligand, binding, unbinding, pocket, pose. \
+    Update these keywords to data.note to help featurization. 
 - If user provided residue selections to select atoms, summarize the selections and wrap them with '{' '}' in your response. \
-And update these formated selections to data.note to help featurization. \
-For example, if the user selected residues 10 to 20 in chain A and residues 40 to 50 in chain B, your response should \
-include: {A: [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], B: [40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]}.
+    And update these formated selections to data.note to help featurization. \
+    For example, if the user selected residues 10 to 20 in chain A and residues 40 to 50 in chain B, your response should \
+    include: {A: [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], B: [40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]}.
 - If working with atom selections, summarize the selection following mdtraj atom selection grammar into list of selection rules and update atom_selection in the config. \
 - Do not directly generate pair selections based on residue selection: pair selection is for atom indices. \
-The safe way is to add the formated residue selections to note and call tool to convert to correct atom indices.
+    The safe way is to add the formated residue selections to note and call tool to convert to correct atom indices.
 - If user want to *refine* feature pair selection based on contact frequency, ensure stage1 have run with distance feature. \
-Add contact frequency to data.note to help featurization.
+    Add contact frequency to data.note to help featurization.
 
 Pipeline rules:
-- Stage 3 requires tica.selected_lag_time to be set.
-- Stage 6 requires microMSM.selected_lag_time to be set.
-- To skip stage 2 and 3, and proceed with raw features for stage 4. Set cluster.cv_path to feature path from stage 1. \
-However, this approach is generally not encouraged, because tICA is important for noise filtering and finding dominant processes. 
-- To skip previous stages and build MSM from user provided microstate assignments, update microMSM.micro_assign_path in config to \
-the path of the microstate assignments file. 
+- It is recommended to always first run the full pipeline and building MSM with tICA coordinates. \
+This provides model baseline to compare and physical coordinates (tICAs) for kinetic mode visualization.  
+- Stage 3 requires tica.selected_lag_time to be set, and optionally tica.selected_n_timescales.
+- Stage 6 requires microMSM.selected_lag_time to be set, and optinonally microMSM.selected_n_timescales.
+- Given a low dimensional feature, it is possible to skip stage 2 and 3 and proceed with raw features for stage 4. \
+    This can be achieved by setting cluster.cv_path to feature path from stage 1. \
+    However, this approach is generally not encouraged, because tICA is important for noise filtering and finding dominant processes.
+- If user provided their precalculated features, update data.load_preprocessed_dir in config to the path of the features directory. \
+    This will allow the pipeline to use the precalculated features instead of recalculating from start.
+- If user provided their CV coordinates/ physical coordinates, update clustering.cv_path in config to the path of the CV coordinates file. \
+    These coordinates can be used for MSM construction and projection visualization (recommended).
+- To build MSM from user provided CV coordinates, update clustering.cv_path in config to the path of the CV coordinates file. \
+    In addition, the value of microMSM.dt_ns should be set to the time step in ns of the CV coordinates. \
+- To build MSM from user provided microstate assignments, update microMSM.micro_assign_path in config to \
+    the path of the microstate assignments file. In addition, the value of microMSM.dt_ns should be set to the time step in ns of the microstate assignments. \
+    And the value of microMSM.n_timescales should be set to the number of timescales to be computed. \
+- To build MSM from user provided macrostate assignments, update macroMSM.macro_assign_path in config to \
+    the path of the macrostate assignments file. In addition, the value of macroMSM.dt_ns should be set to the time step in ns of the macrostate assignments. \
+    And the value of macroMSM.lag_time should be set to the lag time in frames used to build the macrostate MSM. \
+    Then directly run stage 7 to start macrostate MSM construction.  
 """
 
 SYSTEM_PROMPT += f"""Config update rules:

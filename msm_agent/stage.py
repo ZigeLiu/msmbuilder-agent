@@ -1,6 +1,7 @@
 #msm_agent/msm_agent/stage.py
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import traceback
 from typing import Any, Dict, List, Optional
@@ -14,6 +15,7 @@ import numpy as np
 from msmbuilder.decomposition import tICA
 from msmbuilder.msm import MarkovStateModel
 import msmbuilder.lumping as lump_module
+from msmbuilder import tpt
 
 # ===== Adjust these imports to your real project layout =====
 from msm_agent.featurizationv1 import (
@@ -84,10 +86,12 @@ def load_processed_from_run_dir(run_dir: str | Path, data_type: str | None = Non
     if data_type is None:
         load_dir = run_dir
     else:
-        assert data_type in ["features", "tica_trajs", "clustered_trajs"], f"Unknown data_type: {data_type}"
+        assert data_type in ["features", "tica_trajs", "clustered_trajs", "macro_trajs"], f"Unknown data_type: {data_type}"
         load_dir = run_dir / data_type
     if not load_dir.exists():
-        raise ValueError(f"Directory not found: {load_dir}")
+        #raise ValueError(f"Directory not found: {load_dir}")
+        print(f"Directory not found: {load_dir}")
+        return None
 
     files = sorted(glob.glob(str(load_dir / "*.npy")))
     if not files:
@@ -238,7 +242,6 @@ def run_stage2_tica_scan(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any
     plateau_check = its_plateau_check(tica_its, lag_list.tolist())
     manifest = {
         "stage2": {
-            "dt_ns": float(dt_ns),
             "plot_path": str(plot_path),
             "tica_its": tica_its,
             "plateau_check": plateau_check,
@@ -369,8 +372,11 @@ def run_stage4_cluster(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]:
     try:
         if cfg["clustering"]["cv_path"] is not None: #prioritize processed cv
             tics = load_processed_from_run_dir(cfg["clustering"]["cv_path"])
+            dt_ns = cfg["clustering"]["dt_ns"]
+            os.makedirs(run_dir / "figs", exist_ok=True)
         else:
             tics = load_processed_from_run_dir(run_dir, "tica_trajs")
+            dt_ns = read_json(run_dir / "manifest.json")["stage1"]["dt_ns_effective"]
         cl_cfg = cfg["clustering"]
         clusterer = find_clusterer(cl_cfg=cl_cfg)
         clustered_trajs = clusterer.fit_transform(tics)
@@ -407,9 +413,9 @@ def run_stage4_cluster(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]:
                 "hint": "Error using tool. The agent should modify tool choice."
             }],
         }
-    
     manifest = {
         "stage4": {
+            "dt_ns": float(dt_ns),
             "cluster_traj_dir": str(run_dir / "cluster_trajs"),
             "cluster_centers_path": str(run_dir / "clustered_trajs" / "cluster_centers.txt"),
             "occupancy": {key: occ_stats[key] for key in occ_stats if key != "occupancies"},
@@ -444,9 +450,11 @@ def run_stage5_msm_scan(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]
     try:
         if cfg["microMSM"]["micro_assign_path"] is not None:
             clustered_trajs = load_processed_from_run_dir(cfg["microMSM"]["micro_assign_path"])
+            dt_ns = cfg["microMSM"]["dt_ns"]
+            os.makedirs(run_dir / "figs", exist_ok=True)
         else:
             clustered_trajs = load_processed_from_run_dir(run_dir, "clustered_trajs")
-        dt_ns = read_json(run_dir / "manifest.json")["stage1"]["dt_ns_effective"]
+            dt_ns = read_json(run_dir / "manifest.json")["stage4"]["dt_ns"]
         all_state = np.unique(np.concatenate(clustered_trajs).reshape(-1))
         
         msm_cfg = cfg["microMSM"]
@@ -504,6 +512,7 @@ def run_stage5_msm_scan(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]
 
     manifest = {
         "stage5": {
+            "dt_ns": float(dt_ns),
             "sparsity": sparsity,
             "plateau_check": plateau_check,
             "plot_path": str(run_dir / "figs" / "microstateMSM_its_curve.png"),
@@ -531,10 +540,12 @@ def run_stage6_msm_fit(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]:
     try:
         if cfg["microMSM"]["micro_assign_path"] is not None:
             clustered_trajs = load_processed_from_run_dir(cfg["microMSM"]["micro_assign_path"])
+            dt_ns = cfg["microMSM"]["dt_ns"]
+            os.makedirs(run_dir / "figs", exist_ok=True)
         else:
             clustered_trajs = load_processed_from_run_dir(run_dir, "clustered_trajs")
-        cluster_centers = np.loadtxt(read_json(run_dir / "manifest.json")["stage4"]["cluster_centers_path"])
-        dt_ns = read_json(run_dir / "manifest.json")["stage1"]["dt_ns_effective"]
+            cluster_centers = np.loadtxt(read_json(run_dir / "manifest.json")["stage4"]["cluster_centers_path"])
+            dt_ns = read_json(run_dir / "manifest.json")["stage5"]["dt_ns"]
 
         msm_cfg = cfg["microMSM"]
         selected_lag_time = msm_cfg["selected_lag_time"]
@@ -555,10 +566,16 @@ def run_stage6_msm_fit(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]:
                                reversible_type=msm_cfg["reversible_type"], ergodic_cutoff=float(msm_cfg["ergodic_cutoff"]))
         msm.fit(clustered_trajs)
         ck_results = ck_test(msm, clustered_trajs, num_states=Metric_param.ck_test_states, plot_dir=run_dir / "figs")
-        tics = load_processed_from_run_dir(run_dir, "tica_trajs")
-        txx = np.concatenate(tics, axis=0)
-        weights = msm.populations_[np.concatenate(clustered_trajs)]
-        plot_free_energy(txx[:,0], txx[:,1], weights, msm, run_dir / "figs" / "weighted_freeenergy.png", centers=cluster_centers)
+        all_plot_path = [str(run_dir / "figs" / "CK_test.png")]
+        if cfg["clustering"]["cv_path"] is not None:
+            tics = load_processed_from_run_dir(cfg["clustering"]["cv_path"])
+        else:
+            tics = load_processed_from_run_dir(run_dir, "tica_trajs")
+        if tics is not None:
+            txx = np.concatenate(tics, axis=0)
+            weights = msm.populations_[np.concatenate(clustered_trajs)]
+            plot_free_energy(txx[:,0], txx[:,1], weights, msm, run_dir / "figs" / "weighted_freeenergy.png", centers=cluster_centers)
+            all_plot_path.append(str(run_dir / "figs" / "weighted_freeenergy.png"))
     except (ValueError, AssertionError) as e:
         traceback.print_exc()
         return {
@@ -590,11 +607,11 @@ def run_stage6_msm_fit(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]:
     ts = np.asarray(dt_ns*msm.timescales_, dtype=float)
     manifest = {
         "stage6": {
-            "dt_ns_effective": float(dt_ns),
+            "dt_ns": float(dt_ns),
             "timescales_ns": ts.tolist(),
             "ck_test_results": ck_results,
             "microMSM_dir": str(run_dir / "microstateMSM_model.pkl"),
-            "plot_path": [str(run_dir / "figs" / "CK_test.png"), str(run_dir / "figs" / "weighted_freeenergy.png")],
+            "plot_path": all_plot_path,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
     }
@@ -609,7 +626,7 @@ def run_stage6_msm_fit(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]:
         "stage": "stage6_msm_fit",
         "run_dir": str(run_dir),
         "summary": summary,
-        "plot_path": [str(run_dir / "figs" / "CK_test.png"), str(run_dir / "figs" / "weighted_freeenergy.png")],
+        "plot_path": all_plot_path,
     }
 
     
@@ -617,28 +634,38 @@ def run_stage7_lumpeval(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]
     run_dir = Path(run_dir)
     cfg = asdict(cfg)
     try:
-        stage6_manifest = read_json(run_dir / "manifest.json")["stage6"]
-        with open(stage6_manifest["microMSM_dir"], 'rb') as f:
-            microMSM = pickle.load(f)
-        if cfg["microMSM"]["micro_assign_path"] is not None:
-            clustered_trajs = load_processed_from_run_dir(cfg["microMSM"]["micro_assign_path"])
-        else:
-            clustered_trajs = load_processed_from_run_dir(run_dir, "clustered_trajs")
-
         msm_cfg = cfg["macroMSM"]
-        msm_cfg["n_macrostates"] = int(msm_cfg["n_macrostates"]) if msm_cfg["n_macrostates"] else cfg["microMSM"]["selected_n_timescales"]+1
-        cfg["macroMSM"]["n_macrostates"] = msm_cfg["n_macrostates"]
-        save_config(cfg, run_dir / "config.yaml")
+        if msm_cfg["macro_assign_path"] is not None:
+            macro_trajs = load_processed_from_run_dir(msm_cfg["macro_assign_path"])
+            dt_ns = msm_cfg["dt_ns"]
+            lagtime = int(msm_cfg["lag_time"])
+            msm_cfg["n_macrostates"] = len(np.unique(np.concatenate(macro_trajs, axis=0))) 
+            cfg["macroMSM"]["n_macrostates"] = msm_cfg["n_macrostates"]
+            save_config(cfg, run_dir / "config.yaml")
+            os.makedirs(run_dir / "figs", exist_ok=True)
+        else:
+            stage6_manifest = read_json(run_dir / "manifest.json")["stage6"]
+            with open(stage6_manifest["microMSM_dir"], 'rb') as f:
+                microMSM = pickle.load(f)
+            if cfg["microMSM"]["micro_assign_path"] is not None:
+                clustered_trajs = load_processed_from_run_dir(cfg["microMSM"]["micro_assign_path"])
+            else:
+                clustered_trajs = load_processed_from_run_dir(run_dir, "clustered_trajs")
+            dt_ns = read_json(run_dir / "manifest.json")["stage6"]["dt_ns"]
+            lagtime = int(cfg["microMSM"]["selected_lag_time"])
+            msm_cfg["n_macrostates"] = int(msm_cfg["n_macrostates"]) if msm_cfg["n_macrostates"] else cfg["microMSM"]["selected_n_timescales"]+1
+            cfg["macroMSM"]["n_macrostates"] = msm_cfg["n_macrostates"]
+            save_config(cfg, run_dir / "config.yaml")
+            lumper = getattr(lump_module, msm_cfg["lump_method"]).from_msm(microMSM, n_macrostates=msm_cfg["n_macrostates"])
+            macro_trajs = lumper.transform(clustered_trajs)
+            _save_intermediate(macro_trajs, run_dir / "macro_trajs")
 
-        lumper = getattr(lump_module, msm_cfg["lump_method"]).from_msm(microMSM, n_macrostates=msm_cfg["n_macrostates"])
-        macro_trajs = lumper.transform(clustered_trajs)
-        _save_intermediate(macro_trajs, run_dir / "macro_trajs")
-
-        msm = MarkovStateModel(lag_time=int(cfg["microMSM"]["selected_lag_time"]),\
+        msm = MarkovStateModel(lag_time=lagtime,\
                                     reversible_type=msm_cfg["reversible_type"], ergodic_cutoff=float(msm_cfg["ergodic_cutoff"]))
         msm.fit(macro_trajs)
+        modes = msm.eigtransform(macro_trajs)
+        modes = np.concatenate(modes, axis=0)
         occ_stat = compute_occupancy_stats(np.concatenate(macro_trajs).reshape(-1), n_clusters=int(msm_cfg["n_macrostates"]))
-        dt_ns = read_json(run_dir / "manifest.json")["stage1"]["dt_ns_effective"]
         lag_list = np.linspace(int(cfg["microMSM"]["lag_time_frames_range"][0]),int(cfg["microMSM"]["lag_time_frames_range"][1]),\
                                        num=int(cfg["microMSM"]["lag_time_frames_grid_size"]), dtype=int)
         its = compute_msm_its(
@@ -653,15 +680,34 @@ def run_stage7_lumpeval(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]
             its,
             outpath=run_dir / "figs" / "macrostateMSM_its_curve.png",
         )
-        tics = load_processed_from_run_dir(run_dir, "tica_trajs")
-        txx = np.concatenate(tics, axis=0)
-        plot_projection(
-            txx[:, 0],
-            txx[:, 1],
-            outpath=run_dir / "figs" / "macrostate_assignment.png",
-            labels=["tIC 1", "tIC 2", "Macrostate Assignment"],
-            z=np.concatenate(macro_trajs),
-        )
+        all_plot_path = [str(run_dir / "figs" / "macrostateMSM_its_curve.png")]
+        if cfg["clustering"]["cv_path"] is not None:
+            tics = load_processed_from_run_dir(cfg["clustering"]["cv_path"])
+            labelxy = ["CV1", "CV2"]
+        else:
+            tics = load_processed_from_run_dir(run_dir, "tica_trajs")
+            labelxy = ["tIC 1", "tIC 2"]
+        if tics is not None:
+            txx = np.concatenate(tics, axis=0)
+            plot_projection(
+                txx[:, 0],
+                txx[:, 1],
+                outpath=run_dir / "figs" / "macrostate_assignment.png",
+                labels=labelxy + ["Macrostate Assignment"],
+                z=np.concatenate(macro_trajs),
+            )
+            all_plot_path.append(str(run_dir / "figs" / "macrostate_assignment.png"))
+            for i in range(modes.shape[1]): 
+                plot_projection(
+                    txx[:, 0],
+                    txx[:, 1],
+                    outpath=run_dir / "figs" / f"macrostate_kinetic_mode{i+1}.png",
+                    labels=labelxy + [f"Kinetic mode {i+1}"],
+                    cmap="coolwarm",
+                    z=modes[:,i],
+                )
+                all_plot_path.append(str(run_dir / "figs" / f"macrostate_kinetic_mode{i+1}.png"))
+        mfpt = tpt.mfpts(msm,lag_time=lagtime*dt_ns)
     except (ValueError, AssertionError) as e:
         traceback.print_exc()
         return {
@@ -689,13 +735,15 @@ def run_stage7_lumpeval(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]
     with open(run_dir / "macrostateMSM_model.pkl", 'wb') as f:
         pickle.dump(msm, f)
 
-    ts = np.asarray(msm.timescales_, dtype=float)*stage6_manifest['dt_ns_effective']
+    ts = np.asarray(msm.timescales_, dtype=float)*dt_ns
     manifest = {
         "stage7": {
             "timescales_ns": ts.tolist(),
             "cooccupancy": {key: occ_stat[key] for key in occ_stat if key != "occupancies"},
             "macroMSM_dir": str(run_dir / "macrostateMSM_model.pkl"),
-            "plot_path": [str(run_dir / "figs" / "macrostateMSM_its_curve.png"), str(run_dir / "figs" / "macrostate_assignment.png")],
+            "macro_traj_dir": str(run_dir / "macro_trajs"),
+            "MFPT": mfpt,
+            "plot_path": all_plot_path,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         },
     }
@@ -703,6 +751,7 @@ def run_stage7_lumpeval(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]
     summary = build_stage7_summary(
         run_dir=run_dir,
         macro_occupancy=occ_stat,
+        mfpt=mfpt,
         ts=ts,
     )
     return {
@@ -710,5 +759,5 @@ def run_stage7_lumpeval(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]
         "stage": "stage7_lumpeval",
         "run_dir": str(run_dir),
         "summary": summary,
-        "plot_path": [str(run_dir / "figs" / "macrostateMSM_its_curve.png"), str(run_dir / "figs" / "macrostate_assignment.png")],
+        "plot_path": all_plot_path,
     }

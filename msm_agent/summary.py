@@ -208,6 +208,7 @@ def build_stage6_summary(
 def build_stage7_summary(
     run_dir: Path,
     macro_occupancy: Dict[str, Any],
+    mfpt: np.array,
     ts: List[float],
 ) -> str:
     lines = [
@@ -216,6 +217,9 @@ def build_stage7_summary(
         f"Number of macrostates: {macro_occupancy['n_clusters']}",
         f"Macrostate populations: {macro_occupancy['occupancies']}",
         f"Captured timescales (ns): {ts}",
+        f"Mean first passage time (ns):{mfpt}",
+        "Please check the mean first passage times and compare to expected values for your data to determine if the model is biophysically meaningful",
+        "Extremely long MFPTs normally indicates a disconnected model",
     ]
     if macro_occupancy['tiny_frac'] > 0.2:
         lines += [
