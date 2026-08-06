@@ -55,6 +55,7 @@ class DataConfig(ConfigBase):
     saving_interval: int = 1
     stride: int = 1
     load_preprocessed_dir: str = None
+    physical_coord: str = None
     note: str = "Info about this system"
 
 @dataclass
@@ -263,8 +264,11 @@ This provides model baseline to compare and physical coordinates (tICAs) for kin
     However, this approach is generally not encouraged, because tICA is important for noise filtering and finding dominant processes.
 - If user provided their precalculated features, update data.load_preprocessed_dir in config to the path of the features directory. \
     This will allow the pipeline to use the precalculated features instead of recalculating from start.
-- If user provided their CV coordinates/ physical coordinates, update clustering.cv_path in config to the path of the CV coordinates file. \
-    These coordinates can be used for MSM construction and projection visualization (recommended).
+- If user provided their physical coordinates, update data.physical_coord in config to the path of the physical coordinates file. \
+    These coordinates can be used for projection visualization of state assignments and kinetic modes. \
+    When requested by user, you can update clustering.cv_path to the same set of physical coordinates path to start MSM construction. 
+- If user provided their CV coordinates and want to start from stage 4, update clustering.cv_path in config to the path of the CV coordinates file. \
+    Then directly run stage 4 to start MSM construction. 
 - To build MSM from user provided CV coordinates, update clustering.cv_path in config to the path of the CV coordinates file. \
     In addition, the value of microMSM.dt_ns should be set to the time step in ns of the CV coordinates. \
 - To build MSM from user provided microstate assignments, update microMSM.micro_assign_path in config to \

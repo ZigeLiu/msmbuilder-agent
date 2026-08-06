@@ -370,13 +370,14 @@ def run_stage4_cluster(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]:
     cfg = asdict(cfg)
 
     try:
-        if cfg["clustering"]["cv_path"] is not None: #prioritize processed cv
+        tics = load_processed_from_run_dir(run_dir, "tica_trajs")
+        if tics is not None: # full pipeline
+            dt_ns = read_json(run_dir / "manifest.json")["stage1"]["dt_ns_effective"]
+        else: # tica do not exist, start from cv
             tics = load_processed_from_run_dir(cfg["clustering"]["cv_path"])
+            assert tics is not None, "Starting from user provided CV for clustering, but provided cv path is invalid."
             dt_ns = cfg["clustering"]["dt_ns"]
             os.makedirs(run_dir / "figs", exist_ok=True)
-        else:
-            tics = load_processed_from_run_dir(run_dir, "tica_trajs")
-            dt_ns = read_json(run_dir / "manifest.json")["stage1"]["dt_ns_effective"]
         cl_cfg = cfg["clustering"]
         clusterer = find_clusterer(cl_cfg=cl_cfg)
         clustered_trajs = clusterer.fit_transform(tics)
@@ -567,14 +568,16 @@ def run_stage6_msm_fit(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]:
         msm.fit(clustered_trajs)
         ck_results = ck_test(msm, clustered_trajs, num_states=Metric_param.ck_test_states, plot_dir=run_dir / "figs")
         all_plot_path = [str(run_dir / "figs" / "CK_test.png")]
-        if cfg["clustering"]["cv_path"] is not None:
-            tics = load_processed_from_run_dir(cfg["clustering"]["cv_path"])
+        if cfg["data"]["physical_coord"] is not None:
+            tics = load_processed_from_run_dir(cfg["data"]["physical_coord"])
+            proj_label = ["Physical Coord 1", "Physical Coord 2"]
         else:
             tics = load_processed_from_run_dir(run_dir, "tica_trajs")
+            proj_label = ["tIC 1", "tIC 2"]
         if tics is not None:
             txx = np.concatenate(tics, axis=0)
             weights = msm.populations_[np.concatenate(clustered_trajs)]
-            plot_free_energy(txx[:,0], txx[:,1], weights, msm, run_dir / "figs" / "weighted_freeenergy.png", centers=cluster_centers)
+            plot_free_energy(txx[:,0], txx[:,1], weights, msm, run_dir / "figs" / "weighted_freeenergy.png", proj_label, centers=cluster_centers)
             all_plot_path.append(str(run_dir / "figs" / "weighted_freeenergy.png"))
     except (ValueError, AssertionError) as e:
         traceback.print_exc()
@@ -681,9 +684,9 @@ def run_stage7_lumpeval(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]
             outpath=run_dir / "figs" / "macrostateMSM_its_curve.png",
         )
         all_plot_path = [str(run_dir / "figs" / "macrostateMSM_its_curve.png")]
-        if cfg["clustering"]["cv_path"] is not None:
-            tics = load_processed_from_run_dir(cfg["clustering"]["cv_path"])
-            labelxy = ["CV1", "CV2"]
+        if cfg["data"]["physical_coord"] is not None:
+            tics = load_processed_from_run_dir(cfg["data"]["physical_coord"])
+            labelxy = ["Physical Coord 1", "Physical Coord 2"]
         else:
             tics = load_processed_from_run_dir(run_dir, "tica_trajs")
             labelxy = ["tIC 1", "tIC 2"]

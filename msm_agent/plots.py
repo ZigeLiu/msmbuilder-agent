@@ -27,7 +27,7 @@ def _free_energy_2d(x, y, weights=None, bins=90, eps=1e-12):
     F -= np.nanmin(F[np.isfinite(F)])
     return F.T, xedges, yedges
 
-def plot_free_energy(x, y, weights, mdl, outpath, bins=90, centers=None):
+def plot_free_energy(x, y, weights, mdl, outpath, labels, bins=90, centers=None):
     F, xedges, yedges = _free_energy_2d(x, y, weights=weights, bins=bins)
     plt.figure()
     mesh = plt.pcolormesh(xedges, yedges, F, shading="auto")
@@ -38,9 +38,9 @@ def plot_free_energy(x, y, weights, mdl, outpath, bins=90, centers=None):
             c=mdl.left_eigenvectors_[:, 1], # color by eigenvector
             cmap="coolwarm",
             zorder=3) 
-    plt.xlabel("tIC 1")
-    plt.ylabel("tIC 2")
-    plt.colorbar(mesh, label="Free energy (arb.)")
+    plt.xlabel(labels[0])
+    plt.ylabel(labels[1])
+    plt.colorbar(mesh, label="Free energy (dimless)")
     plt.tight_layout()
     plt.savefig(outpath, dpi=200)
     plt.close()
