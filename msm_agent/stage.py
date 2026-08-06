@@ -545,7 +545,6 @@ def run_stage6_msm_fit(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]:
             os.makedirs(run_dir / "figs", exist_ok=True)
         else:
             clustered_trajs = load_processed_from_run_dir(run_dir, "clustered_trajs")
-            cluster_centers = np.loadtxt(read_json(run_dir / "manifest.json")["stage4"]["cluster_centers_path"])
             dt_ns = read_json(run_dir / "manifest.json")["stage5"]["dt_ns"]
 
         msm_cfg = cfg["microMSM"]
@@ -571,9 +570,11 @@ def run_stage6_msm_fit(cfg: AgentConfig, run_dir: str | Path) -> Dict[str, Any]:
         if cfg["data"]["physical_coord"] is not None:
             tics = load_processed_from_run_dir(cfg["data"]["physical_coord"])
             proj_label = ["Physical Coord 1", "Physical Coord 2"]
+            cluster_centers = None
         else:
             tics = load_processed_from_run_dir(run_dir, "tica_trajs")
             proj_label = ["tIC 1", "tIC 2"]
+            cluster_centers = np.loadtxt(read_json(run_dir / "manifest.json")["stage4"]["cluster_centers_path"])
         if tics is not None:
             txx = np.concatenate(tics, axis=0)
             weights = msm.populations_[np.concatenate(clustered_trajs)]
