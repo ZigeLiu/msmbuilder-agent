@@ -1,8 +1,8 @@
-# MSM Agent Pipeline
+# MSMBuilding Agent Pipeline
 
-![MSM Agent pipeline overview](images/fig1.png)
+![MSMBuilding Agent pipeline overview](images/fig1.png)
 
-MSM Agent is an interactive, human-in-the-loop system for constructing Markov state models (MSMs) from molecular dynamics simulations. It combines a fixed, reproducible MSMBuilder workflow with an LLM that can:
+MSMBuilding Agent is an interactive, human-in-the-loop system for constructing Markov state models (MSMs) from molecular dynamics simulations. It combines a fixed, reproducible MSMBuilder workflow with an LLM that can:
 
 - inspect molecular topology and suggest suitable features;
 - interpret model-quality diagnostics and warnings;
