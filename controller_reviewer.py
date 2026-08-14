@@ -1,12 +1,14 @@
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 import json
 
-from agent_openai import TOOLS, SessionState, ALLOWED_CONFIG_UPDATE_PATHS
-from agent_openai import execute_tool, to_llm_messages, safe_yaml_load
+from agent_openai import TOOLS, SessionState
+from msm_agent.config import ConfigState, dump_config_yaml, load_yaml_config_state
+from agent_openai import execute_tool, to_llm_messages
 
 SYSTEM_PROMPT = "Run MSM construction with the following configuration." \
-                "Start from decide feature selection then move from stage 1 to 7." 
+                "If data.load_preprocessed_dir is none, start from decide feature selection then move from stage 1 to 7."\
+                "Else directly load preprocessed data from that directory and run stage 1 to 7." 
 MODEL = "gpt-5.2"
 class SearchController:
     '''
@@ -36,7 +38,7 @@ class SearchController:
                     stage=result.get("current_stage"," "),
                     history=self.history,
                     summary=result.get("latest_summary", " "),
-                    params=result.get("current_cfg_yaml", " "),
+                    params=result.get("current_cfg_state"),
                 )
           
             self.history.append({
@@ -57,34 +59,45 @@ class SearchController:
 class PipelineAgent:
     def __init__(self, client):
         self.client = client
-        self.st = SessionState()
+        self.st = SessionState(plot_path=[])
 
     def run_stage(
         self,
         history: List[Dict[str, str]],
         yaml_cfg: str,
-    ) -> Tuple[List[Dict[str, str]], SessionState, str, str, str, Optional[str]]:
+    ) -> Dict[str, Any]:
         # 1) Sync YAML editor -> session config
         try:
-            cfg_obj = safe_yaml_load(yaml_cfg) # yaml to dict obj
+            touched_sections = (
+                set(self.st.current_cfg_state.touched_sections)
+                if self.st.current_cfg_state is not None
+                else None
+            )
+            cfg_state = load_yaml_config_state(
+                yaml_cfg,
+                touched_sections=touched_sections,
+            ) # read from yaml 
+
         except Exception as e:
             assistant_text = f"Config YAML parse error: {e}"
-            return (
-                assistant_text,
-                self.st,
-                yaml_cfg,
-            )
+            return {
+                "assistant_text": assistant_text,
+                "current_stage": self.st.current_stage,
+                "current_cfg_state": self.st.current_cfg_state,
+                "current_cfg_yaml": self.st.current_cfg_yaml or yaml_cfg,
+                "latest_summary": self.st.latest_summary,
+            }
 
-        self.st.current_cfg_obj = cfg_obj
-        self.st.current_cfg_yaml = yaml_cfg
-        self.st.current_run_dir = cfg_obj.get("run", {}).get("run_dir", self.st.current_run_dir) # read from config or none
+        self.st.current_cfg_state = cfg_state
+        self.st.current_cfg_yaml = dump_config_yaml(cfg_state)
+        self.st.current_run_dir = cfg_state.config.run_dir
         self.st.current_run_dir = Path(self.st.current_run_dir) if self.st.current_run_dir else None 
 
         context_text = (
         f"Current stage: {self.st.current_stage}\n"
         f"Current run_dir: {self.st.current_run_dir}\n"
         f"Latest summary:\n{self.st.latest_summary or 'None'}\n"
-        f"Latest plot path: {self.st.latest_plot_path or 'None'}\n"
+        f"Latest plot path: {self.st.plot_path or 'None'}\n"
     )
 
         input_msgs = [
@@ -151,6 +164,7 @@ class PipelineAgent:
         return {
             "assistant_text": assistant_text,
             "current_stage": self.st.current_stage,
+            "current_cfg_state": self.st.current_cfg_state,
             "current_cfg_yaml": self.st.current_cfg_yaml,
             "latest_summary": self.st.latest_summary,
         }
@@ -164,14 +178,13 @@ class ReviewerAgent:
             You are an expert reviewer for MSM construction. Inspect curent review and history results 
             to approve or decline the current stage. Start response with 'Approve |', 'Decline |' or 'Stop |'.
             """
-        if stage in ["decide_feature", "update_config"]:
-            param_check = []
-            for para in params:
-                if para not in ALLOWED_CONFIG_UPDATE_PATHS:
-                    param_check.append(para) 
+        if stage in ["decide_feature", "config_update"]:
+            param_check = [] if isinstance(params, ConfigState) else ["invalid config state"]
+            params_text = dump_config_yaml(params) if isinstance(params, ConfigState) else str(params)
             message += f"""
                 Check updated config to make sure they are in the correct format.
                 There are paths that are not allowed: {param_check}.
+                Current parameters: {params_text}
                 If all paths are allowed, approve current step. 
                 Otherwise decline current step, correct the format or path name and rerun.
             """
@@ -204,7 +217,7 @@ class ReviewerAgent:
             model=MODEL,
             input=message,
         )
-        decision = response.output_text.split(' |')[0]
+        decision = response.output_text.split(' |')[0] if ' |' in response.output_text else None
         message = response.output_text.split(' |')[1] if ' |' in response.output_text else response.output_text
 
         return {

@@ -3,12 +3,19 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import gradio as gr
-import yaml
 from openai import OpenAI
 
-from agent_openai import init_default_config
+from agent_openai import SessionState
+from msm_agent.config import ConfigState, AgentConfig, dump_config_yaml, load_yaml_config_state
 from controller_reviewer import PipelineAgent, ReviewerAgent
+from msm_agent.parameters import Auto_set, Plot_param
 
+def init_config_state() -> ConfigState:
+    init_config = AgentConfig()
+    run_dir = init_config.run_dir
+    if not run_dir.exists():
+        run_dir.mkdir(parents=True, exist_ok=True)
+    return ConfigState(config=init_config, touched_sections=set(["data"]))
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 STAGE_ORDER = [
@@ -159,7 +166,7 @@ def _snapshot(
     )
     passed_stages = _extract_passed_stages(history)
     config_text = pipeline_agent.st.current_cfg_yaml or ""
-    gallery = _collect_gallery_images(run_dir, pipeline_agent.st.latest_plot_path)
+    gallery = _collect_gallery_images(run_dir, pipeline_agent.st.plot_path)
     return passed_stages, pipeline_status, reviewer_status, config_text, gallery
 
 
@@ -169,36 +176,36 @@ def run_auto_agent(yaml_cfg: str):
     reviewer_agent = ReviewerAgent(client)
     history: List[Dict[str, Any]] = []
     current_yaml = yaml_cfg
-    max_try = 100
+    max_try = Auto_set.max_try
 
-    initial_pipeline_status = "Stage: initializing\nIteration: 0/100\nRun dir: not created yet"
-    initial_reviewer_status = "Latest decision: pending\nIteration: 0/100"
+    initial_pipeline_status = f"Stage: initializing\nIteration: 0/{max_try}\nRun dir: not created yet"
+    initial_reviewer_status = f"Latest decision: pending\nIteration: 0/{max_try}"
     yield "No stages completed yet.", initial_pipeline_status, initial_reviewer_status, current_yaml, []
 
     for step_index in range(1, max_try + 1):
-        result = pipeline_agent.run_stage(history, current_yaml)
+        pipeline_result = pipeline_agent.run_stage(history, current_yaml)
         history.append(
             {
                 "role": "pipelineagent",
-                "stage": result.get("current_stage"),
-                "content": result.get("assistant_text", ""),
-                "summary": result.get("latest_summary", ""),
+                "stage": pipeline_result.get("current_stage"),
+                "content": pipeline_result.get("assistant_text", ""),
+                "summary": pipeline_result.get("latest_summary", ""),
             }
         )
-        current_yaml = result.get("current_cfg_yaml", current_yaml)
+        current_yaml = pipeline_result.get("current_cfg_yaml", current_yaml)
 
-        result = reviewer_agent.review(
-            stage=result.get("current_stage", ""),
+        review_result = reviewer_agent.review(
+            stage=pipeline_result.get("current_stage", ""),
             history=history,
-            summary=result.get("latest_summary", ""),
-            params=result.get("current_cfg_yaml", ""),
+            summary=pipeline_result.get("latest_summary", ""),
+            params=pipeline_result.get("current_cfg_state"),
         )
         history.append(
             {
                 "role": "reviewagent",
-                "stage": result.get("current_stage"),
-                "decision": result.get("decision", ""),
-                "content": result.get("message", ""),
+                "stage": pipeline_result.get("current_stage"),
+                "decision": review_result.get("decision", ""),
+                "content": review_result.get("message", ""),
             }
         )
 
@@ -207,10 +214,10 @@ def run_auto_agent(yaml_cfg: str):
             history=history,
             step_index=step_index,
             max_try=max_try,
-            latest_review=result,
+            latest_review=review_result,
         )
 
-        if result.get("decision") == "Stop":
+        if review_result.get("decision") == "Stop":
             return
 
     history.append(
@@ -235,8 +242,8 @@ def refresh_gallery(yaml_cfg: str) -> List[Tuple[str, str]]:
     run_dir: Optional[Path] = None
 
     try:
-        cfg = yaml.safe_load(yaml_cfg) or {}
-        run_dir_value = cfg.get("run", {}).get("run_dir")
+        cfg_state = load_yaml_config_state(yaml_cfg)
+        run_dir_value = cfg_state.config.run_dir
         if run_dir_value:
             run_dir = Path(run_dir_value)
     except Exception:
@@ -246,6 +253,17 @@ def refresh_gallery(yaml_cfg: str) -> List[Tuple[str, str]]:
 
 
 def build_app():
+    initial_cfg_state = init_config_state()
+    initial_session = SessionState(
+        current_cfg_state=initial_cfg_state,
+        current_cfg_yaml=dump_config_yaml(initial_cfg_state),
+        current_run_dir=Path(initial_cfg_state.config.run_dir),
+        plot_path=[],
+    )
+       
+    plotstyle = Plot_param()
+    plotstyle.apply()
+    
     with gr.Blocks(title="Automatic MSMbuilder Agent") as demo:
         gr.Markdown(
             "## Automatic MSMbuilder Agent\n"
@@ -277,7 +295,7 @@ def build_app():
             cfg_editor = gr.Code(
                 label="Live Config Editor",
                 language="yaml",
-                value=init_default_config(),
+                value=initial_session.current_cfg_yaml,
                 lines=30,
             )
             gallery = gr.Gallery(
