@@ -11,8 +11,8 @@ from msm_agent.config import save_config
 
 NORM_AA = ['ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'GLN', 'GLU', 'GLY', 'HIS', 'ILE', 'LEU', 'LYS', 'MET', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL']
 TERM_AA =['ACE', 'NME']
-MODIFIED_AA = ['MSE', 'PTR', 'SEP', 'TPO', 'HIE'] #### include or not
-AA_NAMES = NORM_AA + TERM_AA
+MODIFIED_AA = ['MSE', 'PTR', 'SEP', 'TPO', 'HIE', 'NLE'] #### include or not
+AA_NAMES = NORM_AA + TERM_AA + MODIFIED_AA
 N_NAMES = ['DA', 'DC', 'DG', 'DT', 'U', 'A', 'C', 'G']
 SOLV_NAMES = ['HOH', 'WAT', 'SOL']
 LIGAND_NAMES = ['LIG']
@@ -80,6 +80,10 @@ def inspect_data(cfg: dict):
     for chain in top.chains:
         seq[chain.index] = []
         for res in chain.residues:
+            unique_atom = np.unique([atom.element.symbol for atom in res.atoms])
+            if unique_atom.size == 1 and unique_atom[0] == 'H': # remove added H 
+                #print(f"Skipping residue {res.name} in chain {chain.index} because it only contains hydrogen atoms.")
+                continue
             seq[chain.index].append(res.name)
     entity = {}
     for chain in top.chains:
@@ -96,7 +100,7 @@ def inspect_data(cfg: dict):
             entity[chain.index] = "other"
     return {
         "n_atoms": top.n_atoms,
-        "n_residues": top.n_residues,
+        #"n_residues": top.n_residues,
         "chain_lengths": [len(seq[chain.index]) for chain in top.chains],
         "entity": [entity[chain.index] for chain in top.chains]
     }

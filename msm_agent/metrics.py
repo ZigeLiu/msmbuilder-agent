@@ -75,12 +75,12 @@ def its_plateau_check(its: dict, lag_list: list, top_k=Metric_param.plateau_top_
     timescales = np.array(timescales)
     # plateau check
     assert len(lagstep) > last_step, f"Need at least {last_step+1} lag times for plateau check, but got {len(lagstep)}"
-    d_lag = np.diff(lagstep) 
     d_ts = np.diff(timescales, axis=0) # [num of lag - 1, top k]
-    rel_d_ts = np.abs(d_ts / (d_lag.reshape(-1, 1) + 1e-12)) # [num of lag - 1, top k]
+    rel_d_ts = np.abs(d_ts / (timescales[:-1] + 1e-12)) # fractional ITS change; independent of absolute scale
     all_plateaued = rel_d_ts < threshold
     rev_all_plateaued = ~all_plateaued
-    min_lag = np.max(rev_all_plateaued.sum(1))+1
+    non_plateau_steps = np.where(rev_all_plateaued.any(axis=1))[0]
+    min_lag = int(non_plateau_steps[-1] + 1) if len(non_plateau_steps) > 0 else 1
     plateaued = all_plateaued[-last_step:, :].all(axis=0) # make sure the time range is long for plateaue
     timescale_separation = timescales[:,1:] / (timescales[:,:-1] + 1e-12) # [num of lag, top k - 1]
     #print(timescale_separation)

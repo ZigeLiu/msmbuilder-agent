@@ -351,6 +351,7 @@ def tool_run_stage(st: SessionState, stage: int, args: Dict[str, Any]) -> Dict[s
         st.plot_path.append(plot_path)
     elif isinstance(plot_path, list):
         st.plot_path.extend(plot_path)
+    st.plot_path = list(set(st.plot_path))  # remove duplicates
     st.error_msg = result.get("errors","")
     return result
 
