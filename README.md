@@ -68,17 +68,14 @@ For persistent credentials, configure `OPENAI_API_KEY` through your shell or env
 First make sure your machine have ollama installed and running. If not, run the following script first to install ollama.
 ```bash
 bash setup_ollama.sh
+ollama serve
 ```
 If executed succeffully, ollama server have been running on your machine. In a new terminal start a LLM model of your choice (here Qwen3.8).
 ```bash
 export OLLAMA_MODEL="qwen3.8"
 ollama run qwen3.8
 ```
-Finally, in a new terminal run the agent and use to link to open user interface.
-```bash
-python agent_ollama.py
-```
-The above can be setup on remote GPU cluster, and the public link can be used for interacting. 
+The above can be setup on remote GPU cluster, and use the public link for interacting. 
 
 ## Run the human-in-the-loop agent
 
@@ -86,6 +83,13 @@ Start the interactive OpenAI agent with:
 
 ```bash
 python agent_openai.py
+```
+
+If using ollama, run the following command in three different terminals.
+```bash
+ollama serve
+ollama run qwen3.8
+python agent_ollama.py
 ```
 
 Open the Gradio URL printed in the terminal. In the interface, you can edit the YAML configuration directly or ask the agent to update supported parameters for you.

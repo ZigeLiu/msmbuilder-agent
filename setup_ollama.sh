@@ -10,4 +10,4 @@ wget https://ollama.com/download/ollama-linux-amd64.tar.zst # or the link corres
 zstd -d ollama-linux-amd64.tar.zst -c |   tar -xf - -C "$HOME/.local/ollama"
 ln -sf "$HOME/.local/ollama/bin/ollama"        "$HOME/.local/bin/ollama"
 export PATH="$HOME/.local/bin:$PATH"
-ollama serve # start ollama server in the background
+
