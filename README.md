@@ -31,14 +31,15 @@ Stage 7: Lump microstates and evaluate the model (microstates -> macrostates)
 
 - Python 3.10 or later
 - [MSMBuilder 2022](https://github.com/msmbuilder/msmbuilder2022)
-- An OpenAI API key when using the OpenAI-backed agents
+- An OpenAI API key when using the OpenAI-backed agents or a running local ollama server
 - Conda (recommended) or another Python environment manager 
 
 ## Installation
+Clone the current repo to your local disk, add your data folder to `data`.
 
 ### Conda setup
 
-Review `setup.sh` and replace the API-key placeholder before running it. The script creates a Python 3.11 Conda environment, installs this project and MSMBuilder 2022, and configures the OpenAI API key.
+Review `setup.sh` and replace the API-key placeholder before running it. The script creates a Python 3.11 Conda environment, installs this agent and MSMBuilder 2022, and configures the API key.
 
 ```bash
 bash setup.sh
@@ -61,7 +62,23 @@ python -m pip install ./msmbuilder2022
 export OPENAI_API_KEY="your_api_key_here"
 ```
 
-For persistent credentials, configure `OPENAI_API_KEY` through your shell or environment manager instead of committing it to the repository.
+For persistent credentials, configure `OPENAI_API_KEY` through your shell or environment manager.
+
+### Local LLM setup
+First make sure your machine have ollama installed and running. If not, run the following script first to install ollama.
+```bash
+bash setup_ollama.sh
+```
+If executed succeffully, ollama server have been running on your machine. In a new terminal start a LLM model of your choice (here Qwen3.8).
+```bash
+export OLLAMA_MODEL="qwen3.8"
+ollama run qwen3.8
+```
+Finally, in a new terminal run the agent and use to link to open user interface.
+```bash
+python agent_ollama.py
+```
+The above can be setup on remote GPU cluster, and the public link can be used for interacting. 
 
 ## Run the human-in-the-loop agent
 
@@ -93,6 +110,3 @@ Each run receives its own directory under `results/` by default. Depending on th
 
 The Gradio interfaces display the active configuration, current stage, latest summary, and available plots while the pipeline is running.
 
-## Local-model support
-
-Experimental Ollama-related implementations are included in the repository (but are currently removed in this version). Ensure the Ollama server is running and review the relevant backend configuration before using those implementations.

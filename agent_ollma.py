@@ -72,7 +72,7 @@ CLIENT = OpenAI(
     base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1/"),
     api_key="ollama",
 )
-MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
+MODEL = os.getenv("OLLAMA_MODEL", "qwen3.8")
 
 TOOLS = [{'type': 'function',
   'function': {'name': 'get_current_status',
@@ -625,4 +625,4 @@ def build_app():
 if __name__ == "__main__":
     demo = build_app()
     demo.queue()
-    demo.launch()
+    demo.launch(share=True)
